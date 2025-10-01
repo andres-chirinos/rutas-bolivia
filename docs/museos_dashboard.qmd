@@ -1,0 +1,497 @@
+---
+title: "Museos de Bolivia — Dashboard"
+format: html
+execute:
+  echo: false
+  warning: false
+---
+
+Un dashboard mínimo que usa Quarto con una celda OJS para pedir al servidor local los datos procesados y mostrar un mapa con Leaflet.
+
+```{ojs}
+(async () => {
+    // Renderiza el contenedor con el panel de control de capas
+    const container = html`<div id='dashboard' style='display:flex; flex-direction:column; gap:8px;'>
+        <div style='display:flex; gap:8px; align-items:center;'>
+            <label>Origen: <select id='srcSelect' style='min-width:100px'></select></label>
+            <button id='computeBtn'>Calcular ruta</button>
+        </div>
+        <div style='display:flex; gap:8px; align-items:center;'>
+            <label>Destino: <select id='dstSelect' style='min-width:100px'></select></label>
+            <button id='refreshBtn' title='Recargar nodos'>Recargar</button>
+        </div>
+        <div style='display:flex; gap:16px;'>
+            <div id='map' style='height:640px; flex:1;'></div>
+            <div id='layerPanel' style='width:250px; border:1px solid #ccc; padding:10px; background:#f9f9f9;'>
+                <h4 style='margin:0 0 10px 0;'>Control de Capas</h4>
+                <div id='layerControls'></div>
+            </div>
+        </div>
+        <div id='info'>Lista de nodos y rutas.</div>
+    </div>`;
+
+    return container;
+})();
+```
+
+```{ojs}
+//| output: false
+// Async IIFE para usar await
+(async () => {
+    // Espera a que el DOM esté listo antes de inicializar el mapa
+    await new Promise(requestAnimationFrame);
+
+    // Carga Leaflet si no está presente
+    if (!window.L) {
+        const link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+        document.head.appendChild(link);
+        await new Promise((resolve) => {
+            const s = document.createElement('script');
+            s.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+            s.onload = resolve;
+            document.body.appendChild(s);
+        });
+    }
+
+    // Solo muestra el mapa centrado en Bolivia
+    const map = L.map('map').setView([-16.5, -68.1], 13);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
+    const apiUrl = 'http://127.0.0.1:8000';
+
+    const info = document.getElementById('info');
+    const srcSelect = document.getElementById('srcSelect');
+    const dstSelect = document.getElementById('dstSelect');
+    const computeBtn = document.getElementById('computeBtn');
+    const refreshBtn = document.getElementById('refreshBtn');
+    const layerControls = document.getElementById('layerControls');
+
+    // Sistema de gestión de capas
+    const layerManager = {
+        layers: {
+            network: { layer: null, name: 'Red de transporte', visible: true, zIndex: 1, color: 'blue' },
+            nodes: { layer: null, name: 'Museos', visible: true, zIndex: 2, color: 'green' },
+            route: { layer: null, name: 'Ruta calculada', visible: true, zIndex: 3, color: 'red' }
+        },
+        
+        addLayer(key, layer, name) {
+            if (this.layers[key] && this.layers[key].layer) {
+                map.removeLayer(this.layers[key].layer);
+            }
+            this.layers[key].layer = layer;
+            if (name) this.layers[key].name = name;
+            this.updateLayerOrder();
+            this.renderControls();
+        },
+        
+        removeLayer(key) {
+            if (this.layers[key] && this.layers[key].layer) {
+                map.removeLayer(this.layers[key].layer);
+                this.layers[key].layer = null;
+            }
+            this.renderControls();
+        },
+        
+        toggleLayer(key) {
+            const layerInfo = this.layers[key];
+            if (!layerInfo.layer) return;
+            
+            layerInfo.visible = !layerInfo.visible;
+            if (layerInfo.visible) {
+                map.addLayer(layerInfo.layer);
+            } else {
+                map.removeLayer(layerInfo.layer);
+            }
+            this.renderControls();
+        },
+        
+        moveLayerUp(key) {
+            const maxZ = Math.max(...Object.values(this.layers).map(l => l.zIndex));
+            if (this.layers[key].zIndex < maxZ) {
+                this.layers[key].zIndex++;
+                this.updateLayerOrder();
+                this.renderControls();
+            }
+        },
+        
+        moveLayerDown(key) {
+            const minZ = Math.min(...Object.values(this.layers).map(l => l.zIndex));
+            if (this.layers[key].zIndex > minZ) {
+                this.layers[key].zIndex--;
+                this.updateLayerOrder();
+                this.renderControls();
+            }
+        },
+        
+        updateLayerOrder() {
+            Object.entries(this.layers).forEach(([key, layerInfo]) => {
+                if (layerInfo.layer && layerInfo.visible) {
+                    layerInfo.layer.setZIndex && layerInfo.layer.setZIndex(layerInfo.zIndex * 100);
+                    if (layerInfo.layer.eachLayer) {
+                        layerInfo.layer.eachLayer(sublayer => {
+                            if (sublayer.setZIndex) sublayer.setZIndex(layerInfo.zIndex * 100);
+                        });
+                    }
+                }
+            });
+        },
+        
+        renderControls() {
+            const sortedLayers = Object.entries(this.layers)
+                .filter(([key, info]) => info.layer)
+                .sort(([,a], [,b]) => b.zIndex - a.zIndex);
+            
+            layerControls.innerHTML = sortedLayers.map(([key, info]) => `
+                <div style='margin-bottom:8px; padding:8px; border:1px solid #ddd; background:white; border-radius:4px;'>
+                    <div style='display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;'>
+                        <label style='display:flex; align-items:center; cursor:pointer;'>
+                            <input type='checkbox' ${info.visible ? 'checked' : ''} 
+                                   onchange='layerManager.toggleLayer("${key}")' style='margin-right:6px;'>
+                            <span style='color:${info.color}; font-weight:bold;'>${info.name}</span>
+                        </label>
+                        <span style='font-size:10px; color:#666;'>Z:${info.zIndex}</span>
+                    </div>
+                    <div style='display:flex; gap:4px;'>
+                        <button onclick='layerManager.moveLayerUp("${key}")' 
+                                style='padding:2px 6px; font-size:10px;' title='Mover arriba'>↑</button>
+                        <button onclick='layerManager.moveLayerDown("${key}")' 
+                                style='padding:2px 6px; font-size:10px;' title='Mover abajo'>↓</button>
+                        <button onclick='layerManager.removeLayer("${key}")' 
+                                style='padding:2px 6px; font-size:10px; background:#ffebee;' title='Eliminar'>✕</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+    };
+    
+    // Hacer el layerManager global para que los botones puedan accederlo
+    window.layerManager = layerManager;
+
+    // Función auxiliar para verificar si bounds son válidos
+    function isValidBounds(bounds) {
+        if (!bounds) return false;
+        try {
+            const sw = bounds.getSouthWest();
+            const ne = bounds.getNorthEast();
+            return sw && ne && 
+                   typeof sw.lat === 'number' && 
+                   typeof sw.lng === 'number' && 
+                   typeof ne.lat === 'number' && 
+                   typeof ne.lng === 'number' &&
+                   sw.lat !== ne.lat && sw.lng !== ne.lng;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function renderNodes(nodesGeojson) {
+        const layer = L.geoJSON(nodesGeojson, {
+            pointToLayer: function(feature, latlng) {
+                return L.circleMarker(latlng, {
+                    radius: 8,
+                    fillColor: '#4CAF50',
+                    color: '#2E7D32',
+                    weight: 2,
+                    opacity: 1,
+                    fillOpacity: 0.7
+                });
+            },
+            onEachFeature: function (feature, layer) {
+                const id = feature.properties && (feature.properties.id || feature.properties.qid || feature.id);
+                const label = feature.properties && (feature.properties.label || feature.properties.name || id);
+                layer.bindPopup(String(label));
+            }
+        });
+        
+        layerManager.addLayer('nodes', layer);
+        
+        // Verificación segura de bounds
+        if (layer.getBounds && typeof layer.getBounds === 'function') {
+            const bounds = layer.getBounds();
+            if (isValidBounds(bounds)) {
+                map.fitBounds(bounds, { padding: [20,20] });
+            }
+        }
+    }
+
+    function populateSelects(nodesGeojson) {
+        srcSelect.innerHTML = '';
+        dstSelect.innerHTML = '';
+        const features = nodesGeojson && nodesGeojson.features ? nodesGeojson.features : [];
+        features.forEach((f) => {
+            const id = f.properties && (f.properties.id || f.properties.qid || f.id);
+            const label = f.properties && (f.properties.label || f.properties.name || id) || id;
+            if (!id) return;
+            const o1 = document.createElement('option'); o1.value = id; o1.text = label;
+            const o2 = document.createElement('option'); o2.value = id; o2.text = label;
+            srcSelect.appendChild(o1);
+            dstSelect.appendChild(o2);
+        });
+        if (srcSelect.options.length > 0) srcSelect.selectedIndex = 0;
+        if (dstSelect.options.length > 1) dstSelect.selectedIndex = 1;
+    }
+
+    async function fetchAndRender(srcId, dstId) {
+        layerManager.removeLayer('route');
+        info.innerText = 'Cargando...';
+        const demoUrl = apiUrl + '/demo/museums?src=' + encodeURIComponent(srcId) + '&dst=' + encodeURIComponent(dstId)+ '&network=' + "dummy_datasets/rutas_recorridos_2025.geojson";
+        try {
+            const resp = await fetch(demoUrl);
+            if (!resp.ok) {
+                const txt = await resp.text();
+                info.innerText = `API error ${resp.status}: ${txt}`;
+                return;
+            }
+
+            const data = await resp.json();
+
+
+            const nodes = data.nodes;
+            const network = data.network;
+            const route = data.route && (data.route.route_geojson || data.route);
+            
+            if (nodes) {
+                renderNodes(nodes);
+                populateSelects(nodes);
+            }
+            
+            if (network) {
+                const networkLayer = L.geoJSON(network, { 
+                    style: { color: '#2196F3', weight: 2, opacity: 0.6 } 
+                });
+                layerManager.addLayer('network', networkLayer);
+            }
+            
+            if (route) {
+                const routeLayer = L.layerGroup();
+                
+                // Colores para diferentes tipos de transporte
+                const transportColors = {
+                    'teleferico': '#E91E63',    // Rosa/magenta para teleférico
+                    'bus': '#2196F3',           // Azul para buses
+                    'minibus': '#FF9800',       // Naranja para minibuses
+                    'taxi': '#9C27B0',          // Púrpura para taxis
+                    'walking': '#4CAF50'        // Verde para caminata
+                };
+                
+                // Contador para líneas desconocidas
+                let unknownLineCounter = 0;
+                const additionalColors = ['#795548', '#607D8B', '#F44336', '#3F51B5', '#009688'];
+                
+                // Recopilar puntos de transferencia
+                const transferPoints = [];
+                
+                if (route.features) {
+                    route.features.forEach((feature, index) => {
+                        const props = feature.properties || {};
+                        const source = props.source || 'unknown';
+                        const transportType = props.transport_type || 'unknown';
+                        const lineId = props.line_id || null;
+                        const isTransfer = props.transfer || false;
+                        
+                        let color, weight, opacity, dashArray;
+                        
+                        if (source === 'walking' || source === 'walk_to_network' || source === 'walk_from_network') {
+                            // Segmentos de caminata
+                            color = transportColors.walking;
+                            weight = 4;
+                            opacity = 0.7;
+                            dashArray = '10, 5'; // Línea punteada
+                        } else if (source === 'transport') {
+                            // Líneas de transporte
+                            color = transportColors[transportType] || additionalColors[unknownLineCounter % additionalColors.length];
+                            if (!transportColors[transportType]) unknownLineCounter++;
+                            
+                            weight = isTransfer ? 6 : 5; // Más gruesa si es transferencia
+                            opacity = 0.9;
+                            dashArray = isTransfer ? '15, 5, 5, 5' : null; // Patrón especial para transferencias
+                        } else {
+                            // Fallback para otros tipos
+                            color = '#666666';
+                            weight = 3;
+                            opacity = 0.6;
+                        }
+                        
+                        const lineLayer = L.geoJSON(feature, {
+                            style: {
+                                color: color,
+                                weight: weight,
+                                opacity: opacity,
+                                dashArray: dashArray
+                            }
+                        });
+                        
+                        // Popup con información detallada
+                        let popupContent = `<strong>Segmento ${index + 1}</strong><br>`;
+                        if (lineId) {
+                            popupContent += `Línea: ${lineId}<br>`;
+                        }
+                        if (transportType !== 'unknown') {
+                            popupContent += `Tipo: ${transportType}<br>`;
+                        }
+                        if (props.distance_km) {
+                            popupContent += `Distancia: ${props.distance_km.toFixed(3)} km<br>`;
+                        }
+                        if (isTransfer) {
+                            popupContent += `<span style="color: orange;">⚡ Transferencia</span><br>`;
+                        }
+                        popupContent += `Fuente: ${source}`;
+                        
+                        lineLayer.bindPopup(popupContent);
+                        routeLayer.addLayer(lineLayer);
+                        
+                        // Marcar puntos de transferencia
+                        if (isTransfer && feature.geometry && feature.geometry.coordinates) {
+                            const coords = feature.geometry.coordinates;
+                            if (coords.length > 0) {
+                                const firstPoint = coords[0];
+                                transferPoints.push({
+                                    latlng: [firstPoint[1], firstPoint[0]], // [lat, lng]
+                                    lineId: lineId,
+                                    transportType: transportType
+                                });
+                            }
+                        }
+                    });
+                    
+                    // Agregar marcadores para puntos de transferencia
+                    transferPoints.forEach((point, index) => {
+                        const marker = L.circleMarker(point.latlng, {
+                            radius: 6,
+                            fillColor: '#FF5722',
+                            color: '#D84315',
+                            weight: 2,
+                            opacity: 1,
+                            fillOpacity: 0.9
+                        });
+                        
+                        marker.bindPopup(`
+                            <strong>⚡ Punto de Transferencia</strong><br>
+                            Línea: ${point.lineId}<br>
+                            Tipo: ${point.transportType}
+                        `);
+                        
+                        routeLayer.addLayer(marker);
+                    });
+                    } else {
+                    // Fallback para formato de ruta simple
+                    const simpleLayer = L.geoJSON(route, { 
+                        style: { color: '#F44336', weight: 4, opacity: 0.8 } 
+                    });
+                    routeLayer.addLayer(simpleLayer);
+                }
+                
+                console.log(route);
+                layerManager.addLayer('route', routeLayer);
+                
+                // Verificación segura de bounds para la ruta
+                if (routeLayer.getBounds && typeof routeLayer.getBounds === 'function') {
+                    const bounds = routeLayer.getBounds();
+                    if (isValidBounds(bounds)) {
+                        map.fitBounds(bounds, { padding: [20,20] });
+                    }
+                }
+            }
+            
+            info.innerText = route && route.properties && route.properties.summary ? route.properties.summary : 'Ruta cargada desde la API.';
+            
+            // Mostrar información detallada de la ruta en el panel
+            if (data.route && data.route.summary) {
+                const summary = data.route.summary;
+                const lines = data.route.lines_used || [];
+                
+                let routeInfo = `<div style="margin-top: 10px; padding: 10px; background: #fff; border: 1px solid #ddd; border-radius: 4px;">
+                    <h5 style="margin: 0 0 8px 0; color: #333;">📊 Resumen de Ruta</h5>
+                    <div style="font-size: 12px; line-height: 1.4;">
+                        <div><strong>Total líneas:</strong> ${summary.total_lines}</div>
+                        <div><strong>Distancia total:</strong> ${summary.total_distance_km.toFixed(2)} km</div>
+                        <div><strong>Caminata:</strong> ${summary.walking_distance_km.toFixed(2)} km</div>
+                        <div><strong>Transporte:</strong> ${summary.transport_distance_km.toFixed(2)} km</div>
+                    </div>
+                </div>`;
+                
+                if (lines.length > 0) {
+                    routeInfo += `<div style="margin-top: 8px; padding: 10px; background: #fff; border: 1px solid #ddd; border-radius: 4px;">
+                        <h5 style="margin: 0 0 8px 0; color: #333;">🚌 Líneas Utilizadas</h5>
+                        <div style="font-size: 11px;">`;
+                    
+                    const transportColors = {
+                        'teleferico': '#E91E63',
+                        'bus': '#2196F3', 
+                        'minibus': '#FF9800',
+                        'taxi': '#9C27B0'
+                    };
+                    
+                    lines.forEach((line, idx) => {
+                        const color = transportColors[line.transport_type] || '#666';
+                        routeInfo += `
+                            <div style="display: flex; align-items: center; margin-bottom: 4px;">
+                                <div style="width: 12px; height: 3px; background: ${color}; margin-right: 6px; border-radius: 1px;"></div>
+                                <span><strong>${line.name}</strong> (${line.transport_type}) - ${line.total_distance.toFixed(2)} km</span>
+                            </div>`;
+                    });
+                    
+                    routeInfo += `</div></div>`;
+                }
+                
+                // Leyenda de colores
+                routeInfo += `<div style="margin-top: 8px; padding: 10px; background: #fff; border: 1px solid #ddd; border-radius: 4px;">
+                    <h5 style="margin: 0 0 8px 0; color: #333;">🎨 Leyenda</h5>
+                    <div style="font-size: 11px; line-height: 1.6;">
+                        <div style="display: flex; align-items: center; margin-bottom: 2px;">
+                            <div style="width: 12px; height: 3px; background: #E91E63; margin-right: 6px;"></div>
+                            <span>Teleférico</span>
+                        </div>
+                        <div style="display: flex; align-items: center; margin-bottom: 2px;">
+                            <div style="width: 12px; height: 3px; background: #2196F3; margin-right: 6px;"></div>
+                            <span>Bus</span>
+                        </div>
+                        <div style="display: flex; align-items: center; margin-bottom: 2px;">
+                            <div style="width: 12px; height: 3px; background: #FF9800; margin-right: 6px;"></div>
+                            <span>Minibus</span>
+                        </div>
+                        <div style="display: flex; align-items: center; margin-bottom: 2px;">
+                            <div style="width: 12px; height: 3px; background: #9C27B0; margin-right: 6px;"></div>
+                            <span>Taxi</span>
+                        </div>
+                        <div style="display: flex; align-items: center; margin-bottom: 2px;">
+                            <div style="width: 12px; height: 3px; background: #4CAF50; margin-right: 6px; border: 1px dashed #333;"></div>
+                            <span>Caminata</span>
+                        </div>
+                        <div style="display: flex; align-items: center;">
+                            <div style="width: 12px; height: 4px; background: #666; margin-right: 6px; border: 1px dashed #333;"></div>
+                            <span>Transferencia</span>
+                        </div>
+                    </div>
+                </div>`;
+                
+                layerControls.innerHTML += routeInfo;
+            }
+        } catch (err) {
+            info.innerText = 'Error: ' + String(err);
+        }
+    }
+
+    // Inicialización
+    try { 
+        await fetchAndRender('Q847038', 'Q6171768'); 
+    } catch (e) { 
+        info.innerText = 'Inicialización fallida: ' + String(e); 
+    }
+
+    computeBtn.addEventListener('click', async () => {
+        const s = srcSelect.value; const d = dstSelect.value;
+        if (!s || !d) { info.innerText = 'Selecciona origen y destino.'; return; }
+        await fetchAndRender(s, d);
+    });
+
+    refreshBtn.addEventListener('click', async () => {
+        const currentSrc = srcSelect.value || 'Q847038';
+        const currentDst = dstSelect.value || 'Q6171768';
+        await fetchAndRender(currentSrc, currentDst);
+    });
+
+})();
+```
