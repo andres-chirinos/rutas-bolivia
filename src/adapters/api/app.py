@@ -13,7 +13,8 @@ Run with:
 """
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from typing import Optional, Any, Dict
 import importlib
 import os
@@ -74,6 +75,46 @@ async def plugin_run(payload: dict):
 
     # Ensure result is JSON-serializable when possible
     return JSONResponse(content={"result": result})
+
+
+@app.get("/museums")
+async def get_museums_only():
+    """Get museums data only, without any route calculation."""
+    try:
+        fetcher = importlib.import_module("plugins.wikidata_plugin.wikidata_fetcher")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to import museums plugin: {e}")
+
+    # prepare tmp dir and filename
+    tmpdir = os.path.join(os.getcwd(), "tmp")
+    os.makedirs(tmpdir, exist_ok=True)
+    nodes_path = os.path.join(tmpdir, f"nodes_{uuid.uuid4().hex}.geojson")
+
+    try:
+        # Fetch museums without any route processing
+        fetcher.fetch_museums_bolivia(nodes_path, limit=100)
+        
+        with open(nodes_path, 'r', encoding='utf-8') as f:
+            nodes_geojson = json.load(f)
+        
+        return JSONResponse(content={
+            "nodes": nodes_geojson,
+            "success": True
+        })
+        
+    except Exception as e:
+        tb = traceback.format_exc()
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": f"Failed to fetch museums: {e}",
+                "traceback": tb
+            }
+        )
+    finally:
+        # Cleanup
+        if os.path.exists(nodes_path):
+            os.remove(nodes_path)
 
 
 @app.get("/demo/museums")
@@ -479,3 +520,23 @@ async def get_asset(asset_id: str):
                 "traceback": tb
             }
         )
+
+
+@app.get("/files/{filename}")
+async def get_file(filename: str):
+    """Serve static files from dummy_datasets directory for layer loading."""
+    import os
+    
+    # Security: Only allow certain file extensions
+    allowed_extensions = ['.geojson', '.json', '.csv']
+    if not any(filename.endswith(ext) for ext in allowed_extensions):
+        raise HTTPException(status_code=400, detail="File type not allowed")
+    
+    # Check in dummy_datasets directory
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+    file_path = os.path.join(base_dir, "dummy_datasets", filename)
+    
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    return FileResponse(file_path)

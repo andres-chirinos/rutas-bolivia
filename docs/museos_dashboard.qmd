@@ -10,15 +10,19 @@ Un dashboard mínimo que usa Quarto con una celda OJS para pedir al servidor loc
 
 ```{ojs}
 (async () => {
-    // Renderiza el contenedor con el panel de control de capas
+    // Renderiza el contenedor simplificado para modo tour únicamente
     const container = html`<div id='dashboard' style='display:flex; flex-direction:column; gap:8px;'>
-        <div style='display:flex; gap:8px; align-items:center;'>
-            <label>Origen: <select id='srcSelect' style='min-width:100px'></select></label>
-            <button id='computeBtn'>Calcular ruta</button>
+        <div style='display:flex; gap:8px; align-items:center; flex-wrap:wrap;'>
+            <button id='clearTourBtn' style='background:#ff5722; color:white; padding:8px 16px;'>🗑️ Limpiar Tour</button>
+            <button id='refreshBtn' style='background:#4CAF50; color:white; padding:8px 16px;' title='Recargar museos'>🔄 Recargar Museos</button>
+            <button id='loadLayersBtn' style='background:#2196F3; color:white; padding:8px 16px;' title='Cargar capas de datos'>📊 Cargar Capas</button>
+            <button id='clearCacheBtn' style='background:#9C27B0; color:white; padding:8px 16px;' title='Limpiar caché de datos'>🗄️ Limpiar Caché</button>
         </div>
-        <div style='display:flex; gap:8px; align-items:center;'>
-            <label>Destino: <select id='dstSelect' style='min-width:100px'></select></label>
-            <button id='refreshBtn' title='Recargar nodos'>Recargar</button>
+        <div id='tourInfo' style='padding:12px; background:#e3f2fd; border:1px solid #2196f3; border-radius:6px;'>
+            <strong>🗺️ Tour de Museos:</strong> <span id='tourList'>Ningún lugar seleccionado</span>
+            <div style='margin-top:6px; font-size:12px; color:#666;'>
+                Haz clic en los museos del mapa para agregarlos al tour. La ruta se calculará automáticamente entre todos los lugares seleccionados.
+            </div>
         </div>
         <div style='display:flex; gap:16px;'>
             <div id='map' style='height:640px; flex:1;'></div>
@@ -27,7 +31,8 @@ Un dashboard mínimo que usa Quarto con una celda OJS para pedir al servidor loc
                 <div id='layerControls'></div>
             </div>
         </div>
-        <div id='info'>Lista de nodos y rutas.</div>
+        <div id='info'>Haz clic en los museos del mapa para crear tu ruta personalizada de tour.</div>
+        <div id='statusInfo' style='font-size:12px; color:#666; padding:4px;'></div>
     </div>`;
 
     return container;
@@ -62,18 +67,502 @@ Un dashboard mínimo que usa Quarto con una celda OJS para pedir al servidor loc
     const apiUrl = 'http://127.0.0.1:8000';
 
     const info = document.getElementById('info');
-    const srcSelect = document.getElementById('srcSelect');
-    const dstSelect = document.getElementById('dstSelect');
-    const computeBtn = document.getElementById('computeBtn');
     const refreshBtn = document.getElementById('refreshBtn');
+    const loadLayersBtn = document.getElementById('loadLayersBtn');
+    const clearCacheBtn = document.getElementById('clearCacheBtn');
     const layerControls = document.getElementById('layerControls');
+    const clearTourBtn = document.getElementById('clearTourBtn');
+    const tourInfo = document.getElementById('tourInfo');
+    const tourList = document.getElementById('tourList');
 
-    // Sistema de gestión de capas
+    // Variables para el modo tour (siempre activo)
+    let selectedPlaces = [];
+    let allNodes = null; // Almacenar todos los nodos disponibles
+
+    // Sistema de caché para evitar peticiones repetidas
+    const cache = {
+        museums: null,
+        datasets: new Map(),
+        routes: new Map(),
+        
+        // Generar clave para rutas
+        getRouteKey(srcId, dstId, network) {
+            return `${srcId}->${dstId}@${network}`;
+        },
+        
+        // Caché de museos
+        getMuseums() {
+            return this.museums;
+        },
+        
+        setMuseums(data) {
+            this.museums = data;
+            // Guardar en localStorage para persistencia
+            try {
+                localStorage.setItem('museos_cache', JSON.stringify({
+                    data: data,
+                    timestamp: Date.now()
+                }));
+            } catch (e) {
+                console.warn('No se pudo guardar en localStorage:', e);
+            }
+        },
+        
+        // Verificar si el caché de museos es válido (24 horas)
+        isMuseumsCacheValid() {
+            try {
+                const cached = localStorage.getItem('museos_cache');
+                if (!cached) return false;
+                
+                const parsed = JSON.parse(cached);
+                const age = Date.now() - parsed.timestamp;
+                const maxAge = 24 * 60 * 60 * 1000; // 24 horas
+                
+                if (age < maxAge) {
+                    this.museums = parsed.data;
+                    return true;
+                }
+            } catch (e) {
+                console.warn('Error verificando caché:', e);
+            }
+            return false;
+        },
+        
+        // Caché de datasets
+        getDataset(filename) {
+            return this.datasets.get(filename);
+        },
+        
+        setDataset(filename, data) {
+            this.datasets.set(filename, data);
+        },
+        
+        // Caché de rutas
+        getRoute(srcId, dstId, network) {
+            const key = this.getRouteKey(srcId, dstId, network);
+            return this.routes.get(key);
+        },
+        
+        setRoute(srcId, dstId, network, data) {
+            const key = this.getRouteKey(srcId, dstId, network);
+            this.routes.set(key, data);
+            
+            // Limitar el tamaño del caché de rutas
+            if (this.routes.size > 50) {
+                const firstKey = this.routes.keys().next().value;
+                this.routes.delete(firstKey);
+            }
+        }
+    };
+
+    // Funciones para el modo tour
+    function updateTourDisplay() {
+        if (selectedPlaces.length === 0) {
+            tourList.textContent = 'Ningún lugar seleccionado';
+        } else {
+            const placeNames = selectedPlaces.map(place => place.label || place.id).join(' → ');
+            tourList.textContent = `${selectedPlaces.length} lugares: ${placeNames}`;
+        }
+    }
+
+    function toggleTourMode() {
+        // Modo tour siempre activo - función removida pero mantenida por compatibilidad
+        info.textContent = 'Modo Tour activo. Haz clic en los museos para agregarlos a tu ruta.';
+        map.getContainer().style.cursor = 'crosshair';
+    }
+
+    function clearTour() {
+        selectedPlaces = [];
+        updateTourDisplay();
+        layerManager.removeLayer('route');
+        layerManager.removeLayer('tourMarkers');
+        info.textContent = 'Tour limpiado.';
+        
+        // Limpiar información del panel de control
+        const existingRouteInfo = layerControls.querySelectorAll('div[style*="margin-top: 10px"]');
+        existingRouteInfo.forEach(el => el.remove());
+    }
+
+    async function calculateTourRoute() {
+        if (selectedPlaces.length < 2) {
+            info.textContent = 'Selecciona al menos 2 lugares para calcular una ruta.';
+            return;
+        }
+
+        info.textContent = 'Calculando ruta del tour...';
+        
+        try {
+            // Calcular ruta punto a punto
+            const routeSegments = [];
+            const allRouteFeatures = [];
+            const network = 'dummy_datasets/puma_katari.geojson';
+            
+            for (let i = 0; i < selectedPlaces.length - 1; i++) {
+                const src = selectedPlaces[i];
+                const dst = selectedPlaces[i + 1];
+                
+                // Verificar caché primero
+                let data = cache.getRoute(src.id, dst.id, network);
+                
+                if (data) {
+                    console.log(`Ruta ${src.id} -> ${dst.id} cargada desde caché`);
+                } else {
+                    // Calcular nueva ruta
+                    const demoUrl = `${apiUrl}/demo/museums?src=${encodeURIComponent(src.id)}&dst=${encodeURIComponent(dst.id)}&network=${network}`;
+                    
+                    const resp = await fetch(demoUrl);
+                    if (resp.ok) {
+                        data = await resp.json();
+                        // Guardar en caché
+                        cache.setRoute(src.id, dst.id, network, data);
+                        console.log(`Ruta ${src.id} -> ${dst.id} calculada y guardada en caché`);
+                    } else {
+                        console.error(`Error calculando ruta ${src.id} -> ${dst.id}: ${resp.status}`);
+                        continue;
+                    }
+                }
+                
+                const route = data.route && (data.route.route_geojson || data.route);
+                
+                if (route && route.features) {
+                    route.features.forEach((feature, index) => {
+                        // Marcar cada segmento con información del tramo del tour
+                        const modifiedFeature = {
+                            ...feature,
+                            properties: {
+                                ...feature.properties,
+                                tour_segment: i + 1,
+                                tour_from: src.label || src.id,
+                                tour_to: dst.label || dst.id,
+                                tour_total_segments: selectedPlaces.length - 1
+                            }
+                        };
+                        allRouteFeatures.push(modifiedFeature);
+                    });
+                    
+                    routeSegments.push({
+                        from: src,
+                        to: dst,
+                        route: data.route
+                    });
+                }
+            }
+            
+            // Renderizar la ruta completa
+            if (allRouteFeatures.length > 0) {
+                const completeRoute = {
+                    type: 'FeatureCollection',
+                    features: allRouteFeatures
+                };
+                
+                renderTourRoute(completeRoute, routeSegments);
+                
+                // Mostrar resumen del tour
+                let totalDistance = 0;
+                let totalWalking = 0;
+                let allLines = new Set();
+                
+                routeSegments.forEach(segment => {
+                    if (segment.route && segment.route.summary) {
+                        totalDistance += segment.route.summary.total_distance_km;
+                        totalWalking += segment.route.summary.walking_distance_km;
+                        if (segment.route.lines_used) {
+                            segment.route.lines_used.forEach(line => allLines.add(line.line_id));
+                        }
+                    }
+                });
+                
+                info.textContent = `Tour completo: ${selectedPlaces.length} lugares, ${totalDistance.toFixed(2)} km total, ${allLines.size} líneas de transporte`;
+            } else {
+                info.textContent = 'No se pudo calcular la ruta del tour.';
+            }
+            
+        } catch (error) {
+            console.error('Error calculating tour route:', error);
+            info.textContent = 'Error al calcular la ruta del tour: ' + error.message;
+        }
+    }
+
+    function updateTourMarkers() {
+        // Remover marcadores existentes
+        layerManager.removeLayer('tourMarkers');
+        
+        if (selectedPlaces.length === 0) return;
+        
+        const markersLayer = L.layerGroup();
+        
+        selectedPlaces.forEach((place, index) => {
+            let markerColor, markerIcon;
+            
+            if (index === 0) {
+                // Primer lugar (origen)
+                markerColor = '#4CAF50';
+                markerIcon = '🚩';
+            } else if (index === selectedPlaces.length - 1) {
+                // Último lugar (destino)
+                markerColor = '#F44336';
+                markerIcon = '🏁';
+            } else {
+                // Lugares intermedios
+                markerColor = '#FF9800';
+                markerIcon = '📍';
+            }
+            
+            const marker = L.circleMarker(place.latlng, {
+                radius: 12,
+                fillColor: markerColor,
+                color: '#FFF',
+                weight: 3,
+                opacity: 1,
+                fillOpacity: 0.8
+            });
+            
+            marker.bindPopup(`
+                <strong>${markerIcon} Parada ${index + 1}</strong><br>
+                ${place.label}<br>
+                <small>Clic para eliminar del tour</small>
+            `);
+            
+            // Permitir eliminar al hacer clic
+            marker.on('click', function(e) {
+                e.originalEvent.stopPropagation();
+                selectedPlaces.splice(index, 1);
+                updateTourDisplay();
+                updateTourMarkers();
+                
+                if (selectedPlaces.length >= 2) {
+                    setTimeout(calculateTourRoute, 500);
+                } else {
+                    layerManager.removeLayer('route');
+                }
+            });
+            
+            markersLayer.addLayer(marker);
+            
+            // Agregar número de parada
+            const numberMarker = L.marker(place.latlng, {
+                icon: L.divIcon({
+                    className: 'tour-number',
+                    html: `<div style="background: ${markerColor}; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px; border: 2px solid white;">${index + 1}</div>`,
+                    iconSize: [20, 20],
+                    iconAnchor: [10, 10]
+                })
+            });
+            
+            markersLayer.addLayer(numberMarker);
+        });
+        
+        layerManager.addLayer('tourMarkers', markersLayer, 'Lugares seleccionados');
+    }
+
+    function renderTourRoute(routeGeoJSON, routeSegments) {
+        const routeLayer = L.layerGroup();
+        
+        // Colores para diferentes tipos de transporte
+        const transportColors = {
+            'teleferico': '#E91E63',
+            'bus': '#2196F3',
+            'minibus': '#FF9800',
+            'taxi': '#9C27B0',
+            'walking': '#4CAF50'
+        };
+        
+        // Colores para diferentes segmentos del tour
+        const segmentColors = ['#F44336', '#2196F3', '#4CAF50', '#FF9800', '#9C27B0', '#795548', '#607D8B'];
+        
+        let segmentCount = 0;
+        
+        if (routeGeoJSON.features && Array.isArray(routeGeoJSON.features)) {
+            routeGeoJSON.features.forEach((feature, index) => {
+                const props = feature.properties || {};
+                const source = props.source || 'unknown';
+                const transportType = props.transport_type || 'unknown';
+                const lineId = props.line_id || null;
+                const isTransfer = props.transfer || false;
+                const tourSegment = props.tour_segment || 1;
+                
+                let color, weight, opacity, dashArray;
+                
+                if (source === 'walking' || source === 'walk_to_network' || source === 'walk_from_network') {
+                    color = transportColors.walking;
+                    weight = 4;
+                    opacity = 0.7;
+                    dashArray = '10, 5';
+                } else if (source === 'transport') {
+                    color = transportColors[transportType] || segmentColors[(tourSegment - 1) % segmentColors.length];
+                    weight = isTransfer ? 6 : 5;
+                    opacity = 0.9;
+                    dashArray = isTransfer ? '15, 5, 5, 5' : null;
+                } else {
+                    color = segmentColors[(tourSegment - 1) % segmentColors.length];
+                    weight = 3;
+                    opacity = 0.6;
+                }
+                
+                try {
+                    const lineLayer = L.geoJSON(feature, {
+                        style: {
+                            color: color,
+                            weight: weight,
+                            opacity: opacity,
+                            dashArray: dashArray
+                        }
+                    });
+                    
+                    let popupContent = `<strong>Tour: Segmento ${tourSegment}</strong><br>`;
+                    if (props.tour_from && props.tour_to) {
+                        popupContent += `De: ${props.tour_from}<br>A: ${props.tour_to}<br>`;
+                    }
+                    if (lineId) {
+                        popupContent += `Línea: ${lineId}<br>`;
+                    }
+                    if (transportType !== 'unknown') {
+                        popupContent += `Tipo: ${transportType}<br>`;
+                    }
+                    if (props.distance_km) {
+                        popupContent += `Distancia: ${props.distance_km.toFixed(3)} km<br>`;
+                    }
+                    if (isTransfer) {
+                        popupContent += `<span style="color: orange;">⚡ Transferencia</span><br>`;
+                    }
+                    popupContent += `Fuente: ${source}`;
+                    
+                    lineLayer.bindPopup(popupContent);
+                    routeLayer.addLayer(lineLayer);
+                    segmentCount++;
+                    
+                } catch (e) {
+                    console.error('Error processing tour route segment:', e, feature);
+                }
+            });
+        }
+        
+        layerManager.addLayer('route', routeLayer, 'Ruta del Tour');
+        
+        // Ajustar vista al tour completo
+        if (routeLayer.getLayers().length > 0) {
+            try {
+                const bounds = routeLayer.getBounds();
+                if (isValidBounds(bounds)) {
+                    map.fitBounds(bounds, { padding: [20,20] });
+                }
+            } catch (e) {
+                console.warn('Could not fit bounds for tour route:', e);
+            }
+        }
+        
+        // Mostrar información del tour en el panel
+        showTourSummary(routeSegments);
+    }
+
+    function showTourSummary(routeSegments) {
+        // Limpiar información previa
+        const existingRouteInfo = layerControls.querySelectorAll('div[style*="margin-top: 10px"]');
+        existingRouteInfo.forEach(el => el.remove());
+        
+        let totalDistance = 0;
+        let totalWalking = 0;
+        let totalTransport = 0;
+        const allLines = new Set();
+        const transportTypes = new Set();
+        
+        routeSegments.forEach(segment => {
+            if (segment.route && segment.route.summary) {
+                totalDistance += segment.route.summary.total_distance_km;
+                totalWalking += segment.route.summary.walking_distance_km;
+                totalTransport += segment.route.summary.transport_distance_km;
+                
+                if (segment.route.lines_used) {
+                    segment.route.lines_used.forEach(line => {
+                        allLines.add(line.line_id);
+                        transportTypes.add(line.transport_type);
+                    });
+                }
+            }
+        });
+        
+        let tourInfo = `<div style="margin-top: 10px; padding: 10px; background: #fff; border: 1px solid #ddd; border-radius: 4px;">
+            <h5 style="margin: 0 0 8px 0; color: #333;">🗺️ Resumen del Tour</h5>
+            <div style="font-size: 12px; line-height: 1.4;">
+                <div><strong>Lugares a visitar:</strong> ${selectedPlaces.length}</div>
+                <div><strong>Segmentos de ruta:</strong> ${routeSegments.length}</div>
+                <div><strong>Distancia total:</strong> ${totalDistance.toFixed(2)} km</div>
+                <div><strong>Caminata:</strong> ${totalWalking.toFixed(2)} km</div>
+                <div><strong>Transporte:</strong> ${totalTransport.toFixed(2)} km</div>
+                <div><strong>Líneas usadas:</strong> ${allLines.size}</div>
+            </div>
+        </div>`;
+        
+        // Mostrar itinerario detallado
+        if (routeSegments.length > 0) {
+            tourInfo += `<div style="margin-top: 8px; padding: 10px; background: #fff; border: 1px solid #ddd; border-radius: 4px;">
+                <h5 style="margin: 0 0 8px 0; color: #333;">📋 Itinerario</h5>
+                <div style="font-size: 11px;">`;
+            
+            routeSegments.forEach((segment, idx) => {
+                const summary = segment.route.summary || {};
+                tourInfo += `
+                    <div style="margin-bottom: 6px; padding: 4px; background: #f5f5f5; border-radius: 2px;">
+                        <strong>${idx + 1}. ${segment.from.label} → ${segment.to.label}</strong><br>
+                        <span style="color: #666;">
+                            ${summary.total_distance_km ? summary.total_distance_km.toFixed(2) + ' km' : 'N/A'} • 
+                            ${summary.total_lines || 0} líneas • 
+                            ${summary.walking_distance_km ? summary.walking_distance_km.toFixed(2) + ' km caminata' : '0 km caminata'}
+                        </span>
+                    </div>`;
+            });
+            
+            tourInfo += `</div></div>`;
+        }
+        
+        layerControls.innerHTML += tourInfo;
+    }
+
+    // Sistema de gestión de capas expandido
     const layerManager = {
         layers: {
-            network: { layer: null, name: 'Red de transporte', visible: true, zIndex: 1, color: 'blue' },
-            nodes: { layer: null, name: 'Museos', visible: true, zIndex: 2, color: 'green' },
-            route: { layer: null, name: 'Ruta calculada', visible: true, zIndex: 3, color: 'red' }
+            network_rutas: { layer: null, name: 'Rutas Puma Katari', visible: false, zIndex: 1, color: '#2196F3' },
+            network_vias: { layer: null, name: 'Vías GAMLP', visible: false, zIndex: 2, color: '#FF9800' },
+            network_calles: { layer: null, name: 'Red Puma Katari', visible: false, zIndex: 3, color: '#9C27B0' },
+            network_teleferico: { layer: null, name: 'Líneas Teleférico', visible: false, zIndex: 4, color: '#E91E63' },
+            network_igm: { layer: null, name: 'Caminos IGM', visible: false, zIndex: 5, color: '#795548' },
+            nodes: { layer: null, name: 'Museos', visible: true, zIndex: 6, color: '#4CAF50' },
+            route: { layer: null, name: 'Ruta calculada', visible: true, zIndex: 7, color: '#F44336' },
+            tourMarkers: { layer: null, name: 'Lugares seleccionados', visible: true, zIndex: 8, color: '#FF5722' }
+        },
+        
+        // Configuración de datasets disponibles
+        datasets: {
+            'rutas_recorridos_2025.geojson': {
+                name: 'Rutas de Transporte Publico',
+                description: 'Líneas de transporte público de Bus, Micro, Minibus, Carry y Trufi',
+                style: { color: '#2196F3', weight: 3, opacity: 0.7 },
+                layer_key: 'network_rutas'
+            },
+            'vias_gamlp_catastro.geojson': {
+                name: 'Vías GAMLP',
+                description: 'Red vial del catastro municipal GAMLP',
+                style: { color: '#FF9800', weight: 2, opacity: 0.6 },
+                layer_key: 'network_vias'
+            },
+            'puma_katari.geojson': {
+                name: 'Red Puma Katari',
+                description: 'Red completa del sistema Puma Katari',
+                style: { color: '#9C27B0', weight: 2, opacity: 0.5 },
+                layer_key: 'network_calles'
+            },
+            'lineasteleferico.geojson': {
+                name: 'Líneas Teleférico',
+                description: 'Red de teleférico Mi Teleférico La Paz',
+                style: { color: '#E91E63', weight: 4, opacity: 0.8 },
+                layer_key: 'network_teleferico'
+            },
+            'caminos_igm250000.geojson': {
+                name: 'Caminos IGM',
+                description: 'Red de caminos del Instituto Geográfico Militar escala 1:250000',
+                style: { color: '#795548', weight: 1, opacity: 0.4 },
+                layer_key: 'network_igm'
+            }
         },
         
         addLayer(key, layer, name) {
@@ -82,8 +571,104 @@ Un dashboard mínimo que usa Quarto con una celda OJS para pedir al servidor loc
             }
             this.layers[key].layer = layer;
             if (name) this.layers[key].name = name;
+            
+            // Asegurar que la capa se agregue al mapa si está marcada como visible
+            if (this.layers[key].visible) {
+                map.addLayer(layer);
+            }
+            
             this.updateLayerOrder();
             this.renderControls();
+        },
+        
+        async addLayerFromDataset(datasetName, url = null) {
+            const dataset = this.datasets[datasetName];
+            if (!dataset) {
+                console.error('Dataset no encontrado:', datasetName);
+                return false;
+            }
+            
+            // Verificar caché primero
+            let data = cache.getDataset(datasetName);
+            if (data) {
+                console.log(`Dataset ${dataset.name} cargado desde caché`);
+                const statusInfo = document.getElementById('statusInfo');
+                if (statusInfo) statusInfo.textContent = `${dataset.name} cargada desde caché`;
+            } else {
+                // URL por defecto si no se proporciona
+                const dataUrl = url || `http://localhost:8000/files/${datasetName}`;
+                
+                try {
+                    console.log(`Cargando dataset: ${dataset.name}`);
+                    const statusInfo = document.getElementById('statusInfo');
+                    if (statusInfo) statusInfo.textContent = `Cargando ${dataset.name}...`;
+                    
+                    const response = await fetch(dataUrl);
+                    if (!response.ok) {
+                        throw new Error(`Error al cargar ${datasetName}: ${response.statusText}`);
+                    }
+                    
+                    data = await response.json();
+                    console.log(`Dataset ${datasetName} cargado:`, data);
+                    
+                    // Guardar en caché
+                    cache.setDataset(datasetName, data);
+                    
+                } catch (error) {
+                    console.error(`Error cargando ${datasetName}:`, error);
+                    const statusInfo = document.getElementById('statusInfo');
+                    if (statusInfo) statusInfo.textContent = `Error cargando ${dataset.name}: ${error.message}`;
+                    return false;
+                }
+            }
+            
+            try {
+                // Crear capa con estilo personalizado
+                const layer = L.geoJSON(data, {
+                    style: (feature) => ({
+                        ...dataset.style,
+                        fillColor: dataset.style.color,
+                        fillOpacity: dataset.style.opacity * 0.3
+                    }),
+                    pointToLayer: (feature, latlng) => {
+                        return L.circleMarker(latlng, {
+                            radius: 4,
+                            ...dataset.style,
+                            fillColor: dataset.style.color,
+                            fillOpacity: 0.6
+                        });
+                    }
+                });
+                
+                // Guardar referencia a la capa
+                const layerInfo = this.layers[dataset.layer_key];
+                if (layerInfo.layer) {
+                    // Remover capa existente
+                    map.removeLayer(layerInfo.layer);
+                }
+                
+                layerInfo.layer = layer;
+                
+                // Agregar al mapa si está visible
+                if (layerInfo.visible) {
+                    map.addLayer(layer);
+                }
+                
+                console.log(`Capa ${dataset.name} agregada exitosamente`);
+                const statusInfo = document.getElementById('statusInfo');
+                if (statusInfo) statusInfo.textContent = `${dataset.name} cargada exitosamente`;
+                
+                // Actualizar control de capas
+                this.updateLayerOrder();
+                this.renderControls();
+                
+                return true;
+            } catch (error) {
+                console.error(`Error procesando ${datasetName}:`, error);
+                const statusInfo = document.getElementById('statusInfo');
+                if (statusInfo) statusInfo.textContent = `Error procesando ${dataset.name}: ${error.message}`;
+                return false;
+            }
         },
         
         removeLayer(key) {
@@ -163,6 +748,104 @@ Un dashboard mínimo que usa Quarto con una celda OJS para pedir al servidor loc
                     </div>
                 </div>
             `).join('');
+        },
+        
+        // Panel de carga de datasets
+        showLayerLoadingPanel() {
+            const panelHTML = `
+                <div id="layerLoadingPanel" style="
+                    position: fixed;
+                    top: 50%;
+                    left: 50%;
+                    transform: translate(-50%, -50%);
+                    background: white;
+                    padding: 20px;
+                    border-radius: 10px;
+                    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                    z-index: 1001;
+                    max-width: 500px;
+                    width: 90%;
+                ">
+                    <h3 style="margin-top: 0;">📊 Cargar Capas de Datos</h3>
+                    <div id="datasetList" style="margin: 15px 0;">
+                        ${Object.entries(this.datasets).map(([filename, dataset]) => `
+                            <div style="margin: 10px 0; padding: 10px; border: 1px solid #ddd; border-radius: 5px;">
+                                <label style="display: flex; align-items: center; cursor: pointer;">
+                                    <input type="checkbox" id="dataset_${filename}" 
+                                           ${this.layers[dataset.layer_key]?.layer ? 'checked' : ''}
+                                           style="margin-right: 10px;">
+                                    <div>
+                                        <strong>${dataset.name}</strong><br>
+                                        <small style="color: #666;">${dataset.description}</small>
+                                    </div>
+                                </label>
+                            </div>
+                        `).join('')}
+                    </div>
+                    <div style="text-align: right; margin-top: 20px;">
+                        <button id="cancelLayerLoad" style="margin-right: 10px; padding: 8px 16px; background: #ccc; border: none; border-radius: 4px; cursor: pointer;">
+                            Cancelar
+                        </button>
+                        <button id="confirmLayerLoad" style="padding: 8px 16px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                            Aplicar Cambios
+                        </button>
+                    </div>
+                </div>
+                <div id="layerLoadingOverlay" style="
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    width: 100%;
+                    height: 100%;
+                    background: rgba(0,0,0,0.5);
+                    z-index: 1000;
+                "></div>
+            `;
+            
+            document.body.insertAdjacentHTML('beforeend', panelHTML);
+            
+            // Event handlers para el panel
+            document.getElementById('cancelLayerLoad').onclick = () => {
+                this.closeLayerLoadingPanel();
+            };
+            
+            document.getElementById('layerLoadingOverlay').onclick = () => {
+                this.closeLayerLoadingPanel();
+            };
+            
+            document.getElementById('confirmLayerLoad').onclick = async () => {
+                await this.applyLayerChanges();
+                this.closeLayerLoadingPanel();
+            };
+        },
+        
+        closeLayerLoadingPanel() {
+            const panel = document.getElementById('layerLoadingPanel');
+            const overlay = document.getElementById('layerLoadingOverlay');
+            if (panel) panel.remove();
+            if (overlay) overlay.remove();
+        },
+        
+        async applyLayerChanges() {
+            for (const [filename, dataset] of Object.entries(this.datasets)) {
+                const checkbox = document.getElementById(`dataset_${filename}`);
+                const layerInfo = this.layers[dataset.layer_key];
+                
+                if (checkbox.checked && !layerInfo.layer) {
+                    // Cargar nueva capa
+                    await this.addLayerFromDataset(filename);
+                } else if (!checkbox.checked && layerInfo.layer) {
+                    // Remover capa existente
+                    map.removeLayer(layerInfo.layer);
+                    layerInfo.layer = null;
+                    layerInfo.visible = false;
+                }
+            }
+            
+            this.updateLayerOrder();
+            this.renderControls();
+            const statusInfo = document.getElementById('statusInfo');
+            if (statusInfo) statusInfo.textContent = 'Capas actualizadas exitosamente';
         }
     };
     
@@ -187,6 +870,8 @@ Un dashboard mínimo que usa Quarto con una celda OJS para pedir al servidor loc
     }
 
     function renderNodes(nodesGeojson) {
+        allNodes = nodesGeojson; // Guardar referencia para el modo tour
+        
         const layer = L.geoJSON(nodesGeojson, {
             pointToLayer: function(feature, latlng) {
                 return L.circleMarker(latlng, {
@@ -201,7 +886,41 @@ Un dashboard mínimo que usa Quarto con una celda OJS para pedir al servidor loc
             onEachFeature: function (feature, layer) {
                 const id = feature.properties && (feature.properties.id || feature.properties.qid || feature.id);
                 const label = feature.properties && (feature.properties.label || feature.properties.name || id);
+                
                 layer.bindPopup(String(label));
+                
+                // Agregar manejo de clics para el modo tour (siempre activo)
+                layer.on('click', function(e) {
+                    e.originalEvent.stopPropagation();
+                    
+                    const placeInfo = {
+                        id: id,
+                        label: label,
+                        coordinates: [e.latlng.lng, e.latlng.lat], // [lon, lat] para GeoJSON
+                        latlng: e.latlng
+                    };
+                    
+                    // Verificar si ya está seleccionado
+                    const existingIndex = selectedPlaces.findIndex(place => place.id === id);
+                    
+                    if (existingIndex >= 0) {
+                        // Eliminar si ya está seleccionado
+                        selectedPlaces.splice(existingIndex, 1);
+                        info.textContent = `${label} eliminado del tour.`;
+                    } else {
+                        // Agregar al tour
+                        selectedPlaces.push(placeInfo);
+                        info.textContent = `${label} agregado al tour.`;
+                    }
+                    
+                    updateTourDisplay();
+                    updateTourMarkers();
+                    
+                    // Auto-calcular ruta si hay al menos 2 lugares
+                    if (selectedPlaces.length >= 2) {
+                        setTimeout(calculateTourRoute, 500); // Pequeño delay para mejor UX
+                    }
+                });
             }
         });
         
@@ -217,26 +936,18 @@ Un dashboard mínimo que usa Quarto con una celda OJS para pedir al servidor loc
     }
 
     function populateSelects(nodesGeojson) {
-        srcSelect.innerHTML = '';
-        dstSelect.innerHTML = '';
-        const features = nodesGeojson && nodesGeojson.features ? nodesGeojson.features : [];
-        features.forEach((f) => {
-            const id = f.properties && (f.properties.id || f.properties.qid || f.id);
-            const label = f.properties && (f.properties.label || f.properties.name || id) || id;
-            if (!id) return;
-            const o1 = document.createElement('option'); o1.value = id; o1.text = label;
-            const o2 = document.createElement('option'); o2.value = id; o2.text = label;
-            srcSelect.appendChild(o1);
-            dstSelect.appendChild(o2);
-        });
-        if (srcSelect.options.length > 0) srcSelect.selectedIndex = 0;
-        if (dstSelect.options.length > 1) dstSelect.selectedIndex = 1;
+        // Función removida pero mantenida por compatibilidad - ya no se usan selectores
+        // Los nodos se manejan directamente en el mapa
     }
 
     async function fetchAndRender(srcId, dstId) {
+        // Limpiar información del panel de control antes de cargar nueva ruta
+        const existingRouteInfo = layerControls.querySelectorAll('div[style*="margin-top: 10px"]');
+        existingRouteInfo.forEach(el => el.remove());
+        
         layerManager.removeLayer('route');
         info.innerText = 'Cargando...';
-        const demoUrl = apiUrl + '/demo/museums?src=' + encodeURIComponent(srcId) + '&dst=' + encodeURIComponent(dstId)+ '&network=' + "dummy_datasets/rutas_recorridos_2025.geojson";
+        const demoUrl = apiUrl + '/demo/museums?src=' + encodeURIComponent(srcId) + '&dst=' + encodeURIComponent(dstId)+ '&network=' + "dummy_datasets/puma_katari.geojson";
         try {
             const resp = await fetch(demoUrl);
             if (!resp.ok) {
@@ -246,7 +957,7 @@ Un dashboard mínimo que usa Quarto con una celda OJS para pedir al servidor loc
             }
 
             const data = await resp.json();
-
+            console.log('Data received:', data);
 
             const nodes = data.nodes;
             const network = data.network;
@@ -254,7 +965,7 @@ Un dashboard mínimo que usa Quarto con una celda OJS para pedir al servidor loc
             
             if (nodes) {
                 renderNodes(nodes);
-                populateSelects(nodes);
+                // populateSelects ya no es necesario
             }
             
             if (network) {
@@ -265,6 +976,7 @@ Un dashboard mínimo que usa Quarto con una celda OJS para pedir al servidor loc
             }
             
             if (route) {
+                console.log('Processing route:', route);
                 const routeLayer = L.layerGroup();
                 
                 // Colores para diferentes tipos de transporte
@@ -282,8 +994,9 @@ Un dashboard mínimo que usa Quarto con una celda OJS para pedir al servidor loc
                 
                 // Recopilar puntos de transferencia
                 const transferPoints = [];
+                let segmentCount = 0;
                 
-                if (route.features) {
+                if (route.features && Array.isArray(route.features)) {
                     route.features.forEach((feature, index) => {
                         const props = feature.properties || {};
                         const source = props.source || 'unknown';
@@ -314,183 +1027,300 @@ Un dashboard mínimo que usa Quarto con una celda OJS para pedir al servidor loc
                             opacity = 0.6;
                         }
                         
-                        const lineLayer = L.geoJSON(feature, {
-                            style: {
-                                color: color,
-                                weight: weight,
-                                opacity: opacity,
-                                dashArray: dashArray
+                        try {
+                            const lineLayer = L.geoJSON(feature, {
+                                style: {
+                                    color: color,
+                                    weight: weight,
+                                    opacity: opacity,
+                                    dashArray: dashArray
+                                }
+                            });
+                            
+                            // Popup con información detallada
+                            let popupContent = `<strong>Segmento ${index + 1}</strong><br>`;
+                            if (lineId) {
+                                popupContent += `Línea: ${lineId}<br>`;
                             }
-                        });
-                        
-                        // Popup con información detallada
-                        let popupContent = `<strong>Segmento ${index + 1}</strong><br>`;
-                        if (lineId) {
-                            popupContent += `Línea: ${lineId}<br>`;
-                        }
-                        if (transportType !== 'unknown') {
-                            popupContent += `Tipo: ${transportType}<br>`;
-                        }
-                        if (props.distance_km) {
-                            popupContent += `Distancia: ${props.distance_km.toFixed(3)} km<br>`;
-                        }
-                        if (isTransfer) {
-                            popupContent += `<span style="color: orange;">⚡ Transferencia</span><br>`;
-                        }
-                        popupContent += `Fuente: ${source}`;
-                        
-                        lineLayer.bindPopup(popupContent);
-                        routeLayer.addLayer(lineLayer);
-                        
-                        // Marcar puntos de transferencia
-                        if (isTransfer && feature.geometry && feature.geometry.coordinates) {
-                            const coords = feature.geometry.coordinates;
-                            if (coords.length > 0) {
-                                const firstPoint = coords[0];
-                                transferPoints.push({
-                                    latlng: [firstPoint[1], firstPoint[0]], // [lat, lng]
-                                    lineId: lineId,
-                                    transportType: transportType
-                                });
+                            if (transportType !== 'unknown') {
+                                popupContent += `Tipo: ${transportType}<br>`;
                             }
+                            if (props.distance_km) {
+                                popupContent += `Distancia: ${props.distance_km.toFixed(3)} km<br>`;
+                            }
+                            if (isTransfer) {
+                                popupContent += `<span style="color: orange;">⚡ Transferencia</span><br>`;
+                            }
+                            popupContent += `Fuente: ${source}`;
+                            
+                            lineLayer.bindPopup(popupContent);
+                            routeLayer.addLayer(lineLayer);
+                            segmentCount++;
+                            
+                            // Marcar puntos de transferencia
+                            if (isTransfer && feature.geometry && feature.geometry.coordinates) {
+                                const coords = feature.geometry.coordinates;
+                                if (coords.length > 0) {
+                                    const firstPoint = coords[0];
+                                    transferPoints.push({
+                                        latlng: [firstPoint[1], firstPoint[0]], // [lat, lng]
+                                        lineId: lineId,
+                                        transportType: transportType
+                                    });
+                                }
+                            }
+                        } catch (e) {
+                            console.error('Error processing route segment:', e, feature);
                         }
                     });
                     
                     // Agregar marcadores para puntos de transferencia
                     transferPoints.forEach((point, index) => {
-                        const marker = L.circleMarker(point.latlng, {
-                            radius: 6,
-                            fillColor: '#FF5722',
-                            color: '#D84315',
-                            weight: 2,
-                            opacity: 1,
-                            fillOpacity: 0.9
-                        });
-                        
-                        marker.bindPopup(`
-                            <strong>⚡ Punto de Transferencia</strong><br>
-                            Línea: ${point.lineId}<br>
-                            Tipo: ${point.transportType}
-                        `);
-                        
-                        routeLayer.addLayer(marker);
+                        try {
+                            const marker = L.circleMarker(point.latlng, {
+                                radius: 6,
+                                fillColor: '#FF5722',
+                                color: '#D84315',
+                                weight: 2,
+                                opacity: 1,
+                                fillOpacity: 0.9
+                            });
+                            
+                            marker.bindPopup(`
+                                <strong>⚡ Punto de Transferencia</strong><br>
+                                Línea: ${point.lineId}<br>
+                                Tipo: ${point.transportType}
+                            `);
+                            
+                            routeLayer.addLayer(marker);
+                        } catch (e) {
+                            console.error('Error adding transfer point:', e, point);
+                        }
                     });
-                    } else {
+                } else {
                     // Fallback para formato de ruta simple
-                    const simpleLayer = L.geoJSON(route, { 
-                        style: { color: '#F44336', weight: 4, opacity: 0.8 } 
-                    });
-                    routeLayer.addLayer(simpleLayer);
-                }
-                
-                console.log(route);
-                layerManager.addLayer('route', routeLayer);
-                
-                // Verificación segura de bounds para la ruta
-                if (routeLayer.getBounds && typeof routeLayer.getBounds === 'function') {
-                    const bounds = routeLayer.getBounds();
-                    if (isValidBounds(bounds)) {
-                        map.fitBounds(bounds, { padding: [20,20] });
+                    console.log('Using fallback route rendering');
+                    try {
+                        const simpleLayer = L.geoJSON(route, { 
+                            style: { color: '#F44336', weight: 4, opacity: 0.8 } 
+                        });
+                        routeLayer.addLayer(simpleLayer);
+                        segmentCount = 1;
+                    } catch (e) {
+                        console.error('Error in fallback route rendering:', e);
                     }
                 }
-            }
-            
-            info.innerText = route && route.properties && route.properties.summary ? route.properties.summary : 'Ruta cargada desde la API.';
-            
-            // Mostrar información detallada de la ruta en el panel
-            if (data.route && data.route.summary) {
-                const summary = data.route.summary;
-                const lines = data.route.lines_used || [];
                 
-                let routeInfo = `<div style="margin-top: 10px; padding: 10px; background: #fff; border: 1px solid #ddd; border-radius: 4px;">
-                    <h5 style="margin: 0 0 8px 0; color: #333;">📊 Resumen de Ruta</h5>
-                    <div style="font-size: 12px; line-height: 1.4;">
-                        <div><strong>Total líneas:</strong> ${summary.total_lines}</div>
-                        <div><strong>Distancia total:</strong> ${summary.total_distance_km.toFixed(2)} km</div>
-                        <div><strong>Caminata:</strong> ${summary.walking_distance_km.toFixed(2)} km</div>
-                        <div><strong>Transporte:</strong> ${summary.transport_distance_km.toFixed(2)} km</div>
-                    </div>
-                </div>`;
+                console.log(`Route layer created with ${segmentCount} segments`);
                 
-                if (lines.length > 0) {
-                    routeInfo += `<div style="margin-top: 8px; padding: 10px; background: #fff; border: 1px solid #ddd; border-radius: 4px;">
-                        <h5 style="margin: 0 0 8px 0; color: #333;">🚌 Líneas Utilizadas</h5>
-                        <div style="font-size: 11px;">`;
-                    
-                    const transportColors = {
-                        'teleferico': '#E91E63',
-                        'bus': '#2196F3', 
-                        'minibus': '#FF9800',
-                        'taxi': '#9C27B0'
-                    };
-                    
-                    lines.forEach((line, idx) => {
-                        const color = transportColors[line.transport_type] || '#666';
-                        routeInfo += `
-                            <div style="display: flex; align-items: center; margin-bottom: 4px;">
-                                <div style="width: 12px; height: 3px; background: ${color}; margin-right: 6px; border-radius: 1px;"></div>
-                                <span><strong>${line.name}</strong> (${line.transport_type}) - ${line.total_distance.toFixed(2)} km</span>
-                            </div>`;
-                    });
-                    
-                    routeInfo += `</div></div>`;
+                // Agregar la capa de ruta al mapa
+                layerManager.addLayer('route', routeLayer, 'Ruta calculada');
+                
+                // Verificación segura de bounds para la ruta
+                if (routeLayer.getLayers().length > 0) {
+                    try {
+                        const bounds = routeLayer.getBounds();
+                        if (isValidBounds(bounds)) {
+                            map.fitBounds(bounds, { padding: [20,20] });
+                        }
+                    } catch (e) {
+                        console.warn('Could not fit bounds for route:', e);
+                    }
                 }
                 
-                // Leyenda de colores
-                routeInfo += `<div style="margin-top: 8px; padding: 10px; background: #fff; border: 1px solid #ddd; border-radius: 4px;">
-                    <h5 style="margin: 0 0 8px 0; color: #333;">🎨 Leyenda</h5>
-                    <div style="font-size: 11px; line-height: 1.6;">
-                        <div style="display: flex; align-items: center; margin-bottom: 2px;">
-                            <div style="width: 12px; height: 3px; background: #E91E63; margin-right: 6px;"></div>
-                            <span>Teleférico</span>
+                // Mostrar información detallada de la ruta en el panel
+                if (data.route && data.route.summary) {
+                    const summary = data.route.summary;
+                    const lines = data.route.lines_used || [];
+                    
+                    let routeInfo = `<div style="margin-top: 10px; padding: 10px; background: #fff; border: 1px solid #ddd; border-radius: 4px;">
+                        <h5 style="margin: 0 0 8px 0; color: #333;">📊 Resumen de Ruta</h5>
+                        <div style="font-size: 12px; line-height: 1.4;">
+                            <div><strong>Total líneas:</strong> ${summary.total_lines}</div>
+                            <div><strong>Distancia total:</strong> ${summary.total_distance_km.toFixed(2)} km</div>
+                            <div><strong>Caminata:</strong> ${summary.walking_distance_km.toFixed(2)} km</div>
+                            <div><strong>Transporte:</strong> ${summary.transport_distance_km.toFixed(2)} km</div>
                         </div>
-                        <div style="display: flex; align-items: center; margin-bottom: 2px;">
-                            <div style="width: 12px; height: 3px; background: #2196F3; margin-right: 6px;"></div>
-                            <span>Bus</span>
+                    </div>`;
+                    
+                    if (lines.length > 0) {
+                        routeInfo += `<div style="margin-top: 8px; padding: 10px; background: #fff; border: 1px solid #ddd; border-radius: 4px;">
+                            <h5 style="margin: 0 0 8px 0; color: #333;">🚌 Líneas Utilizadas</h5>
+                            <div style="font-size: 11px;">`;
+                        
+                        const transportColors = {
+                            'teleferico': '#E91E63',
+                            'bus': '#2196F3', 
+                            'minibus': '#FF9800',
+                            'taxi': '#9C27B0'
+                        };
+                        
+                        lines.forEach((line, idx) => {
+                            const color = transportColors[line.transport_type] || '#666';
+                            routeInfo += `
+                                <div style="display: flex; align-items: center; margin-bottom: 4px;">
+                                    <div style="width: 12px; height: 3px; background: ${color}; margin-right: 6px; border-radius: 1px;"></div>
+                                    <span><strong>${line.name}</strong> (${line.transport_type}) - ${line.total_distance.toFixed(2)} km</span>
+                                </div>`;
+                        });
+                        
+                        routeInfo += `</div></div>`;
+                    }
+                    
+                    // Leyenda de colores
+                    routeInfo += `<div style="margin-top: 8px; padding: 10px; background: #fff; border: 1px solid #ddd; border-radius: 4px;">
+                        <h5 style="margin: 0 0 8px 0; color: #333;">🎨 Leyenda</h5>
+                        <div style="font-size: 11px; line-height: 1.6;">
+                            <div style="display: flex; align-items: center; margin-bottom: 2px;">
+                                <div style="width: 12px; height: 3px; background: #E91E63; margin-right: 6px;"></div>
+                                <span>Teleférico</span>
+                            </div>
+                            <div style="display: flex; align-items: center; margin-bottom: 2px;">
+                                <div style="width: 12px; height: 3px; background: #2196F3; margin-right: 6px;"></div>
+                                <span>Bus</span>
+                            </div>
+                            <div style="display: flex; align-items: center; margin-bottom: 2px;">
+                                <div style="width: 12px; height: 3px; background: #FF9800; margin-right: 6px;"></div>
+                                <span>Minibus</span>
+                            </div>
+                            <div style="display: flex; align-items: center; margin-bottom: 2px;">
+                                <div style="width: 12px; height: 3px; background: #9C27B0; margin-right: 6px;"></div>
+                                <span>Taxi</span>
+                            </div>
+                            <div style="display: flex; align-items: center; margin-bottom: 2px;">
+                                <div style="width: 12px; height: 3px; background: #4CAF50; margin-right: 6px; border: 1px dashed #333;"></div>
+                                <span>Caminata</span>
+                            </div>
+                            <div style="display: flex; align-items: center;">
+                                <div style="width: 12px; height: 4px; background: #666; margin-right: 6px; border: 1px dashed #333;"></div>
+                                <span>Transferencia</span>
+                            </div>
                         </div>
-                        <div style="display: flex; align-items: center; margin-bottom: 2px;">
-                            <div style="width: 12px; height: 3px; background: #FF9800; margin-right: 6px;"></div>
-                            <span>Minibus</span>
-                        </div>
-                        <div style="display: flex; align-items: center; margin-bottom: 2px;">
-                            <div style="width: 12px; height: 3px; background: #9C27B0; margin-right: 6px;"></div>
-                            <span>Taxi</span>
-                        </div>
-                        <div style="display: flex; align-items: center; margin-bottom: 2px;">
-                            <div style="width: 12px; height: 3px; background: #4CAF50; margin-right: 6px; border: 1px dashed #333;"></div>
-                            <span>Caminata</span>
-                        </div>
-                        <div style="display: flex; align-items: center;">
-                            <div style="width: 12px; height: 4px; background: #666; margin-right: 6px; border: 1px dashed #333;"></div>
-                            <span>Transferencia</span>
-                        </div>
-                    </div>
-                </div>`;
+                    </div>`;
+                    
+                    layerControls.innerHTML += routeInfo;
+                }
                 
-                layerControls.innerHTML += routeInfo;
+                info.innerText = `Ruta cargada: ${segmentCount} segmentos procesados`;
+            } else {
+                info.innerText = 'No se encontró información de ruta en la respuesta';
             }
+            
         } catch (err) {
+            console.error('Error in fetchAndRender:', err);
             info.innerText = 'Error: ' + String(err);
         }
     }
 
-    // Inicialización
+    // Inicialización optimizada - cargar museos directamente desde caché o endpoint dedicado
     try { 
-        await fetchAndRender('Q847038', 'Q6171768'); 
+        // Verificar caché primero
+        if (cache.isMuseumsCacheValid()) {
+            const cachedMuseums = cache.getMuseums();
+            if (cachedMuseums && cachedMuseums.features) {
+                renderNodes(cachedMuseums);
+                info.textContent = `${cachedMuseums.features.length} museos cargados desde caché. Haz clic en cualquier museo para comenzar tu tour.`;
+            }
+        } else {
+            // Cargar museos usando el endpoint dedicado
+            info.textContent = 'Cargando museos disponibles...';
+            
+            const museumsResp = await fetch(`${apiUrl}/museums`);
+            if (museumsResp.ok) {
+                const museumsData = await museumsResp.json();
+                
+                if (museumsData.nodes && museumsData.nodes.features) {
+                    // Guardar en caché
+                    cache.setMuseums(museumsData.nodes);
+                    
+                    renderNodes(museumsData.nodes);
+                    info.textContent = `${museumsData.nodes.features.length} museos cargados. Haz clic en cualquier museo para comenzar tu tour.`;
+                } else {
+                    info.textContent = 'Museos cargados. Haz clic para comenzar tu tour.';
+                }
+            } else {
+                // Fallback al endpoint anterior si el nuevo no funciona
+                console.warn('Endpoint /museums no disponible, usando fallback');
+                const fallbackResp = await fetch(`${apiUrl}/demo/museums?src=Q847038&dst=Q6171768&network=dummy_datasets/rutas_recorridos_2025.geojson`);
+                if (fallbackResp.ok) {
+                    const fallbackData = await fallbackResp.json();
+                    if (fallbackData.nodes && fallbackData.nodes.features) {
+                        cache.setMuseums(fallbackData.nodes);
+                        renderNodes(fallbackData.nodes);
+                        info.textContent = `${fallbackData.nodes.features.length} museos cargados (fallback). Haz clic en cualquier museo para comenzar tu tour.`;
+                    }
+                } else {
+                    info.textContent = 'Error al cargar museos. Intenta recargar.';
+                }
+            }
+        }
+        
+        // Activar modo tour automáticamente
+        toggleTourMode();
+        
     } catch (e) { 
-        info.innerText = 'Inicialización fallida: ' + String(e); 
+        console.error('Error en inicialización:', e);
+        info.textContent = 'Error al inicializar. Usa el botón Recargar para intentar de nuevo.'; 
     }
 
-    computeBtn.addEventListener('click', async () => {
-        const s = srcSelect.value; const d = dstSelect.value;
-        if (!s || !d) { info.innerText = 'Selecciona origen y destino.'; return; }
-        await fetchAndRender(s, d);
-    });
-
+    // Event listeners simplificados para modo tour únicamente
     refreshBtn.addEventListener('click', async () => {
-        const currentSrc = srcSelect.value || 'Q847038';
-        const currentDst = dstSelect.value || 'Q6171768';
-        await fetchAndRender(currentSrc, currentDst);
+        try {
+            info.textContent = 'Recargando museos...';
+            
+            // Forzar recarga desde el servidor (limpiar caché)
+            cache.museums = null;
+            localStorage.removeItem('museos_cache');
+            
+            const refreshResp = await fetch(`${apiUrl}/museums`);
+            if (refreshResp.ok) {
+                const refreshData = await refreshResp.json();
+                if (refreshData.nodes) {
+                    cache.setMuseums(refreshData.nodes);
+                    renderNodes(refreshData.nodes);
+                    info.textContent = 'Museos recargados desde el servidor. Continúa construyendo tu tour.';
+                } else {
+                    info.textContent = 'Error en la respuesta del servidor.';
+                }
+            } else {
+                // Fallback
+                const fallbackResp = await fetch(`${apiUrl}/demo/museums?src=Q9046895&dst=Q5139104&network=dummy_datasets/puma_katari.geojson`);
+                if (fallbackResp.ok) {
+                    const fallbackData = await fallbackResp.json();
+                    if (fallbackData.nodes) {
+                        cache.setMuseums(fallbackData.nodes);
+                        renderNodes(fallbackData.nodes);
+                        info.textContent = 'Museos recargados (fallback). Continúa construyendo tu tour.';
+                    }
+                }
+            }
+        } catch (e) {
+            console.error('Error al recargar:', e);
+            info.textContent = 'Error al recargar museos: ' + String(e);
+        }
+    });
+    
+    clearTourBtn.addEventListener('click', clearTour);
+    
+    // Event listener para cargar capas
+    loadLayersBtn.addEventListener('click', () => {
+        layerManager.showLayerLoadingPanel();
+    });
+    
+    // Event listener para limpiar caché
+    clearCacheBtn.addEventListener('click', () => {
+        // Limpiar todos los cachés
+        cache.museums = null;
+        cache.datasets.clear();
+        cache.routes.clear();
+        localStorage.removeItem('museos_cache');
+        
+        info.textContent = 'Caché limpiado completamente. Los datos se recargarán la próxima vez.';
+        
+        // Opcional: recargar museos inmediatamente
+        setTimeout(() => {
+            refreshBtn.click();
+        }, 1000);
     });
 
 })();
