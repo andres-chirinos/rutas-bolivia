@@ -1,38 +1,161 @@
 ---
-title: "Museos de Bolivia — Dashboard"
+title: "TurisBOL - Trucho"
 format: html
 execute:
   echo: false
   warning: false
 ---
 
-Un dashboard mínimo que usa Quarto con una celda OJS para pedir al servidor local los datos procesados y mostrar un mapa con Leaflet.
+Un aplicación algo **CANCERIGENA** de google maps
 
 ```{ojs}
 (async () => {
-    // Renderiza el contenedor simplificado para modo tour únicamente
-    const container = html`<div id='dashboard' style='display:flex; flex-direction:column; gap:8px;'>
-        <div style='display:flex; gap:8px; align-items:center; flex-wrap:wrap;'>
-            <button id='clearTourBtn' style='background:#ff5722; color:white; padding:8px 16px;'>🗑️ Limpiar Tour</button>
-            <button id='refreshBtn' style='background:#4CAF50; color:white; padding:8px 16px;' title='Recargar museos'>🔄 Recargar Museos</button>
-            <button id='loadLayersBtn' style='background:#2196F3; color:white; padding:8px 16px;' title='Cargar capas de datos'>📊 Cargar Capas</button>
-            <button id='clearCacheBtn' style='background:#9C27B0; color:white; padding:8px 16px;' title='Limpiar caché de datos'>🗄️ Limpiar Caché</button>
-        </div>
-        <div id='tourInfo' style='padding:12px; background:#e3f2fd; border:1px solid #2196f3; border-radius:6px;'>
-            <strong>🗺️ Tour de Museos:</strong> <span id='tourList'>Ningún lugar seleccionado</span>
-            <div style='margin-top:6px; font-size:12px; color:#666;'>
-                Haz clic en los museos del mapa para agregarlos al tour. La ruta se calculará automáticamente entre todos los lugares seleccionados.
+    // Renderiza el contenedor optimizado para pantalla completa con barra lateral
+    const container = html`<div id='dashboard' style='position:fixed; top:0; left:0; width:100vw; height:100vh; margin:0; padding:0; background:#fff; z-index:1000; overflow:hidden;'>
+        
+        <!-- Barra lateral deslizable -->
+        <div id='sidebar' style='position:absolute; top:0; left:-350px; width:350px; height:100vh; background:#fff; border-right:2px solid #ddd; box-shadow:2px 0 10px rgba(0,0,0,0.1); transition:left 0.3s ease; z-index:1001; overflow-y:auto;'>
+            <!-- Botón para cerrar sidebar -->
+            <div style='position:sticky; top:0; background:#fff; border-bottom:1px solid #eee; padding:8px; text-align:right; z-index:1002;'>
+                <button id='closeSidebarBtn' style='background:#f44336; color:white; border:none; padding:6px 10px; border-radius:4px; cursor:pointer;'>✕ Cerrar</button>
+            </div>
+            
+            <div style='padding:15px;'>
+                <!-- Botones principales en una grilla compacta -->
+                <div style='display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:15px;'>
+                    <button id='refreshBtn' style='background:#4CAF50; color:white; padding:6px 8px; border:none; border-radius:4px; cursor:pointer; font-size:11px;' title='Recargar museos'>🔄 Recargar</button>
+                    <button id='loadLayersBtn' style='background:#2196F3; color:white; padding:6px 8px; border:none; border-radius:4px; cursor:pointer; font-size:11px;' title='Cargar capas'>📊 Capas</button>
+                    <button id='clearCacheBtn' style='background:#9C27B0; color:white; padding:6px 8px; border:none; border-radius:4px; cursor:pointer; font-size:11px;' title='Limpiar caché'>🗄️ Cache</button>
+                    <button id='searchEntityBtn' style='background:#FF5722; color:white; padding:6px 8px; border:none; border-radius:4px; cursor:pointer; font-size:11px;' title='Buscar entidad'>🔍 Entidad</button>
+                    <button id='searchKgBtn' style='background:#795548; color:white; padding:6px 8px; border:none; border-radius:4px; cursor:pointer; font-size:11px;' title='Buscar KG'>🧠 KG</button>
+                    <button id='enhanceKgBtn' style='background:#607d8b; color:white; padding:6px 8px; border:none; border-radius:4px; cursor:pointer; font-size:11px;' title='Enriquecer KG'>🌐 Enriquecer</button>
+                    <button id='analyzeDataBtn' style='background:#009688; color:white; padding:6px 8px; border:none; border-radius:4px; cursor:pointer; font-size:11px;' title='Analizar datos'>📊 Analizar</button>
+                    <button id='clearTourBtn' style='background:#ff5722; color:white; padding:6px 8px; border:none; border-radius:4px; cursor:pointer; font-size:11px;'>🗑️ Limpiar</button>
+                </div>
+
+                <!-- Panel de tour compacto -->
+                <div id='tourInfo' style='padding:10px; background:#e3f2fd; border:1px solid #2196f3; border-radius:6px; margin-bottom:15px;'>
+                    <strong style='font-size:13px;'>�️ Tour:</strong> <span id='tourList' style='font-size:12px;'>Ningún lugar seleccionado</span>
+                    <div style='margin-top:4px; font-size:10px; color:#666;'>
+                        Clic en museos → botón añadir → ruta automática
+                    </div>
+                </div>
+
+                <!-- Control de capas compacto -->
+                <div id='layerPanel' style='background:#f9f9f9; border:1px solid #ccc; border-radius:6px; padding:8px; margin-bottom:15px;'>
+                    <h4 style='margin:0 0 8px 0; font-size:13px;'>Control de Capas</h4>
+                    <div id='layerControls' style='max-height:200px; overflow-y:auto;'></div>
+                </div>
+                <!-- Paneles expandibles -->
+                <div id='searchPanel' style='padding:10px; background:#fff3e0; border:1px solid #ff9800; border-radius:6px; display:none; margin-bottom:10px;'>
+                    <strong style='font-size:12px;'>🔍 Búsqueda por Entidad:</strong>
+                    <div style='margin-top:6px;'>
+                        <select id='entitySelect' style='width:100%; padding:4px; border:1px solid #ccc; border-radius:4px; font-size:11px; margin-bottom:4px;'>
+                            <option value=''>Seleccionar ciudad...</option>
+                            <option value='Q1926'>La Paz</option>
+                            <option value='Q2862'>El Alto</option>
+                            <option value='Q170688'>Santa Cruz</option>
+                            <option value='Q5170'>Cochabamba</option>
+                            <option value='Q5117'>Sucre</option>
+                            <option value='Q5146'>Tarija</option>
+                            <option value='Q3902'>Trinidad</option>
+                            <option value='Q2873'>Cobija</option>
+                        </select>
+                        <div style='display:flex; gap:4px; margin-bottom:6px;'>
+                            <input type='number' id='radiusInput' value='50' min='1' max='500' style='flex:1; padding:4px; border:1px solid #ccc; border-radius:4px; font-size:11px;' placeholder='Radio km'>
+                            <button id='executeSearchBtn' style='background:#ff5722; color:white; padding:4px 8px; border:none; border-radius:4px; cursor:pointer; font-size:10px;'>Buscar</button>
+                        </div>
+                        <button id='closeSearchBtn' style='background:#ccc; color:black; padding:4px 8px; border:none; border-radius:4px; cursor:pointer; font-size:10px; width:100%;'>Cerrar</button>
+                    </div>
+                </div>
+
+                <div id='kgSearchPanel' style='padding:10px; background:#efebe9; border:1px solid #795548; border-radius:6px; display:none; margin-bottom:10px;'>
+                    <strong style='font-size:12px;'>🧠 Búsqueda KG:</strong>
+                    <div style='margin-top:6px;'>
+                        <input type='text' id='kgQueryInput' placeholder='Buscar entidades, datasets...' style='width:100%; padding:4px; border:1px solid #ccc; border-radius:4px; font-size:11px; margin-bottom:4px;'>
+                        <select id='kgTypeFilter' style='width:100%; padding:4px; border:1px solid #ccc; border-radius:4px; font-size:11px; margin-bottom:6px;'>
+                            <option value=''>Todos los tipos</option>
+                            <option value='asset'>Assets/Datasets</option>
+                            <option value='process_instance'>Procesos</option>
+                        </select>
+                        <div style='display:flex; gap:4px;'>
+                            <button id='executeKgSearchBtn' style='background:#795548; color:white; padding:4px 8px; border:none; border-radius:4px; cursor:pointer; font-size:10px; flex:1;'>Buscar</button>
+                            <button id='closeKgSearchBtn' style='background:#ccc; color:black; padding:4px 8px; border:none; border-radius:4px; cursor:pointer; font-size:10px; flex:1;'>Cerrar</button>
+                        </div>
+                    </div>
+                    <div id='kgSearchResults' style='margin-top:8px; max-height:150px; overflow-y:auto; font-size:11px;'></div>
+                </div>
+
+                <div id='enhanceKgPanel' style='padding:10px; background:#e8f5e9; border:1px solid #4caf50; border-radius:6px; display:none; margin-bottom:10px;'>
+                    <strong style='font-size:12px;'>🌐 Enriquecer KG:</strong>
+                    <div style='margin-top:6px;'>
+                        <input type='text' id='externalQueryInput' style='width:100%; padding:4px; margin-bottom:4px; border:1px solid #ccc; border-radius:4px; font-size:11px;' placeholder='Término a buscar...'>
+                        <select id='externalSourceSelect' style='width:100%; padding:4px; border:1px solid #ccc; border-radius:4px; font-size:11px; margin-bottom:6px;'>
+                            <option value='wikidata'>Wikidata</option>
+                            <option value='dbpedia'>DBpedia</option>
+                        </select>
+                        <div style='display:flex; gap:4px;'>
+                            <button id='searchExternalBtn' style='background:#4caf50; color:white; padding:4px 8px; border:none; border-radius:4px; cursor:pointer; font-size:10px; flex:1;'>Buscar</button>
+                            <button id='closeEnhanceBtn' style='background:#f44336; color:white; padding:4px 8px; border:none; border-radius:4px; cursor:pointer; font-size:10px; flex:1;'>Cerrar</button>
+                        </div>
+                    </div>
+                    <div id='externalResults' style='margin-top:8px; max-height:150px; overflow-y:auto; font-size:11px;'></div>
+                </div>
+
+                <div id='analyzeDataPanel' style='padding:10px; background:#e3f2fd; border:1px solid #2196f3; border-radius:6px; display:none; margin-bottom:10px;'>
+                    <strong style='font-size:12px;'>📊 Análisis de Datos:</strong>
+                    <div style='margin-top:6px;'>
+                        <select id='datasetSelect' style='width:100%; padding:4px; border:1px solid #ccc; border-radius:4px; font-size:11px; margin-bottom:4px;'>
+                            <option value=''>Seleccionar dataset...</option>
+                            <option value='dummy_datasets/sample_input.csv'>sample_input.csv</option>
+                            <option value='dummy_datasets/rutas_recorridos_2025.geojson'>rutas_recorridos_2025.geojson</option>
+                        </select>
+                        <div style='margin-bottom:6px; font-size:11px;'>
+                            <input type='checkbox' id='autoEnhanceCheck'> 
+                            <label for='autoEnhanceCheck'>Auto-enriquecer con KG externo</label>
+                        </div>
+                        <div style='display:flex; gap:4px;'>
+                            <button id='analyzeBtn' style='background:#2196f3; color:white; padding:4px 8px; border:none; border-radius:4px; cursor:pointer; font-size:10px; flex:1;'>Analizar</button>
+                            <button id='closeAnalyzeBtn' style='background:#f44336; color:white; padding:4px 8px; border:none; border-radius:4px; cursor:pointer; font-size:10px; flex:1;'>Cerrar</button>
+                        </div>
+                    </div>
+                    <div id='analysisResults' style='margin-top:8px; max-height:150px; overflow-y:auto; font-size:11px;'></div>
+                </div>
+
+                <!-- Info y status al final -->
+                <div id='info' style='font-size:11px; color:#333; padding:8px; background:#f5f5f5; border-radius:4px; margin-bottom:8px;'>Haz clic en los museos del mapa para ver su información y añadirlos al tour.</div>
+                <div id='statusInfo' style='font-size:10px; color:#666; padding:4px; text-align:center;'></div>
             </div>
         </div>
-        <div style='display:flex; gap:16px;'>
-            <div id='map' style='height:640px; flex:1;'></div>
-            <div id='layerPanel' style='width:250px; border:1px solid #ccc; padding:10px; background:#f9f9f9;'>
-                <h4 style='margin:0 0 10px 0;'>Control de Capas</h4>
-                <div id='layerControls'></div>
-            </div>
+
+        <!-- Botón flotante para abrir sidebar - reposicionado para no tapar zoom -->
+        <button id='openSidebarBtn' style='position:absolute; top:15px; left:80px; background:#2196F3; color:white; border:none; padding:12px 16px; border-radius:50px; cursor:pointer; box-shadow:0 4px 12px rgba(0,0,0,0.3); z-index:1002; font-size:14px; transition:all 0.3s ease;'>
+            ☰ Controles
+        </button>
+
+        <!-- Botón de "Ver Ruta" centrado en la parte inferior -->
+        <div id='routeButtonContainer' style='position:absolute; bottom:20px; left:50%; transform:translateX(-50%); z-index:1002; display:none;'>
+            <button id='startRouteBtn' style='background:#FF5722; color:white; padding:12px 24px; border:none; border-radius:25px; cursor:pointer; font-size:16px; box-shadow:0 4px 16px rgba(0,0,0,0.3); transition:all 0.3s ease;'>
+                🚀 Ver Ruta Completa
+            </button>
         </div>
-        <div id='info'>Haz clic en los museos del mapa para crear tu ruta personalizada de tour.</div>
-        <div id='statusInfo' style='font-size:12px; color:#666; padding:4px;'></div>
+
+        <!-- Sidebar de ruta a la derecha -->
+        <div id='routeSidebar' style='position:absolute; top:0; right:-400px; width:400px; height:100vh; background:#fff; border-left:2px solid #FF5722; box-shadow:-2px 0 10px rgba(0,0,0,0.1); transition:right 0.3s ease; z-index:1001; overflow-y:auto;'>
+            <!-- Header del sidebar de ruta -->
+            <div style='position:sticky; top:0; background:#FF5722; color:white; padding:12px; z-index:1002; border-bottom:1px solid #D84315;'>
+                <div style='display:flex; justify-content:space-between; align-items:center;'>
+                    <h3 style='margin:0; font-size:16px;'>🚀 Detalles de la Ruta</h3>
+                    <button id='closeRouteSidebarBtn' style='background:rgba(255,255,255,0.2); color:white; border:none; padding:6px 10px; border-radius:4px; cursor:pointer;'>✕ Cerrar</button>
+                </div>
+            </div>
+            
+            <div id='routeDetailsContent' style='padding:15px; font-size:12px;'></div>
+        </div>
+
+        <!-- Mapa de pantalla completa -->
+        <div id='map' style='width:100vw; height:100vh; position:absolute; top:0; left:0; z-index:1000;'></div>
+        
     </div>`;
 
     return container;
@@ -70,24 +193,68 @@ Un dashboard mínimo que usa Quarto con una celda OJS para pedir al servidor loc
     const refreshBtn = document.getElementById('refreshBtn');
     const loadLayersBtn = document.getElementById('loadLayersBtn');
     const clearCacheBtn = document.getElementById('clearCacheBtn');
+    const searchEntityBtn = document.getElementById('searchEntityBtn');
+    const searchKgBtn = document.getElementById('searchKgBtn');
+    const enhanceKgBtn = document.getElementById('enhanceKgBtn');
+    const analyzeDataBtn = document.getElementById('analyzeDataBtn');
+    const searchPanel = document.getElementById('searchPanel');
+    const kgSearchPanel = document.getElementById('kgSearchPanel');
+    const enhanceKgPanel = document.getElementById('enhanceKgPanel');
+    const analyzeDataPanel = document.getElementById('analyzeDataPanel');
+    const entitySelect = document.getElementById('entitySelect');
+    const radiusInput = document.getElementById('radiusInput');
+    const executeSearchBtn = document.getElementById('executeSearchBtn');
+    const closeSearchBtn = document.getElementById('closeSearchBtn');
+    const kgQueryInput = document.getElementById('kgQueryInput');
+    const kgTypeFilter = document.getElementById('kgTypeFilter');
+    const executeKgSearchBtn = document.getElementById('executeKgSearchBtn');
+    const closeKgSearchBtn = document.getElementById('closeKgSearchBtn');
+    const kgSearchResults = document.getElementById('kgSearchResults');
+    const externalQueryInput = document.getElementById('externalQueryInput');
+    const externalSourceSelect = document.getElementById('externalSourceSelect');
+    const searchExternalBtn = document.getElementById('searchExternalBtn');
+    const closeEnhanceBtn = document.getElementById('closeEnhanceBtn');
+    const externalResults = document.getElementById('externalResults');
+    const datasetSelect = document.getElementById('datasetSelect');
+    const autoEnhanceCheck = document.getElementById('autoEnhanceCheck');
+    const analyzeBtn = document.getElementById('analyzeBtn');
+    const closeAnalyzeBtn = document.getElementById('closeAnalyzeBtn');
+    const analysisResults = document.getElementById('analysisResults');
     const layerControls = document.getElementById('layerControls');
     const clearTourBtn = document.getElementById('clearTourBtn');
     const tourInfo = document.getElementById('tourInfo');
     const tourList = document.getElementById('tourList');
+    const startRouteBtn = document.getElementById('startRouteBtn');
+    const routeButtonContainer = document.getElementById('routeButtonContainer');
+    const routeSidebar = document.getElementById('routeSidebar');
+    const closeRouteSidebarBtn = document.getElementById('closeRouteSidebarBtn');
+    const routeDetailsContent = document.getElementById('routeDetailsContent');
+    const openSidebarBtn = document.getElementById('openSidebarBtn');
+    const closeSidebarBtn = document.getElementById('closeSidebarBtn');
+    const sidebar = document.getElementById('sidebar');
 
     // Variables para el modo tour (siempre activo)
     let selectedPlaces = [];
     let allNodes = null; // Almacenar todos los nodos disponibles
+    let currentRouteDetails = null; // Almacenar detalles de la ruta actual
 
     // Sistema de caché para evitar peticiones repetidas
     const cache = {
         museums: null,
         datasets: new Map(),
         routes: new Map(),
+        entitySearches: new Map(),
+        kgSearches: new Map(),
+        kgEntities: new Map(),
         
         // Generar clave para rutas
         getRouteKey(srcId, dstId, network) {
             return `${srcId}->${dstId}@${network}`;
+        },
+        
+        // Generar clave para búsquedas de KG
+        getKgSearchKey(query, entityType) {
+            return `kg:${query}:${entityType || 'all'}`;
         },
         
         // Caché de museos
@@ -152,6 +319,55 @@ Un dashboard mínimo que usa Quarto con una celda OJS para pedir al servidor loc
                 const firstKey = this.routes.keys().next().value;
                 this.routes.delete(firstKey);
             }
+        },
+        
+        // Caché de búsquedas de entidad
+        getEntitySearch(entityId, radius, includeMuseums, includeTransport) {
+            const key = this.getEntitySearchKey(entityId, radius, includeMuseums, includeTransport);
+            return this.entitySearches.get(key);
+        },
+        
+        setEntitySearch(entityId, radius, includeMuseums, includeTransport, data) {
+            const key = this.getEntitySearchKey(entityId, radius, includeMuseums, includeTransport);
+            this.entitySearches.set(key, data);
+            
+            // Limitar el tamaño del caché de búsquedas
+            if (this.entitySearches.size > 20) {
+                const firstKey = this.entitySearches.keys().next().value;
+                this.entitySearches.delete(firstKey);
+            }
+        },
+        
+        // Caché de búsquedas en KG
+        getKgSearch(query, entityType) {
+            const key = this.getKgSearchKey(query, entityType);
+            return this.kgSearches.get(key);
+        },
+        
+        setKgSearch(query, entityType, data) {
+            const key = this.getKgSearchKey(query, entityType);
+            this.kgSearches.set(key, data);
+            
+            // Limitar el tamaño del caché
+            if (this.kgSearches.size > 30) {
+                const firstKey = this.kgSearches.keys().next().value;
+                this.kgSearches.delete(firstKey);
+            }
+        },
+        
+        // Caché de entidades específicas del KG
+        getKgEntity(entityId) {
+            return this.kgEntities.get(entityId);
+        },
+        
+        setKgEntity(entityId, data) {
+            this.kgEntities.set(entityId, data);
+            
+            // Limitar el tamaño del caché
+            if (this.kgEntities.size > 50) {
+                const firstKey = this.kgEntities.keys().next().value;
+                this.kgEntities.delete(firstKey);
+            }
         }
     };
 
@@ -159,28 +375,950 @@ Un dashboard mínimo que usa Quarto con una celda OJS para pedir al servidor loc
     function updateTourDisplay() {
         if (selectedPlaces.length === 0) {
             tourList.textContent = 'Ningún lugar seleccionado';
+            routeButtonContainer.style.display = 'none';
         } else {
             const placeNames = selectedPlaces.map(place => place.label || place.id).join(' → ');
             tourList.textContent = `${selectedPlaces.length} lugares: ${placeNames}`;
+            
+            // Mostrar botón "Ver Ruta" centrado solo si hay al menos 2 lugares y existe una ruta calculada
+            if (selectedPlaces.length >= 2 && currentRouteDetails) {
+                routeButtonContainer.style.display = 'block';
+            } else {
+                routeButtonContainer.style.display = 'none';
+            }
         }
     }
 
+    // Función global para añadir lugares a la ruta desde los popups
+    function addToTour(id, label, coordinates) {
+        // Verificar si ya está seleccionado
+        const existingIndex = selectedPlaces.findIndex(place => place.id === id);
+        
+        if (existingIndex >= 0) {
+            // Si ya está seleccionado, eliminarlo
+            selectedPlaces.splice(existingIndex, 1);
+            info.textContent = `${label} eliminado del tour.`;
+        } else {
+            // Si no está seleccionado, agregarlo
+            const placeInfo = {
+                id: id,
+                label: label,
+                coordinates: [coordinates[1], coordinates[0]], // [lon, lat] para GeoJSON
+                latlng: { lat: coordinates[0], lng: coordinates[1] }
+            };
+            
+            selectedPlaces.push(placeInfo);
+            info.textContent = `${label} añadido al tour.`;
+        }
+        
+        updateTourDisplay();
+        updateTourMarkers();
+        
+        // Calcular ruta si hay al menos 2 lugares
+        if (selectedPlaces.length >= 2) {
+            setTimeout(calculateTourRoute, 500); // Pequeña pausa para mejor UX
+        } else if (selectedPlaces.length === 0) {
+            layerManager.removeLayer('route');
+            layerManager.removeLayer('tourMarkers');
+        }
+        
+        // Actualizar el popup activo para reflejar el nuevo estado
+        const popup = map.getPopup();
+        if (popup && popup.isOpen()) {
+            // Recrear el contenido del popup con el nuevo estado
+            const isNowInTour = selectedPlaces.some(place => place.id === id);
+            const buttonText = isNowInTour ? '➖ Quitar de la ruta' : '➕ Añadir a la ruta';
+            const buttonColor = isNowInTour ? '#f44336' : '#4CAF50';
+            
+            const currentContent = popup.getContent();
+            const updatedContent = currentContent.replace(
+                /<button[^>]*onclick="window\.addToTour[^"]*"[^>]*>.*?<\/button>/,
+                `<button onclick="window.addToTour('${id}', '${label.replace(/'/g, "\\'")}', [${coordinates[0]}, ${coordinates[1]}])" 
+                         style="background: ${buttonColor}; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                    ${buttonText}
+                </button>`
+            );
+            
+            popup.setContent(updatedContent);
+        }
+    }
+    
+    // Hacer la función global para que sea accesible desde los popups
+    window.addToTour = addToTour;
+
     function toggleTourMode() {
         // Modo tour siempre activo - función removida pero mantenida por compatibilidad
-        info.textContent = 'Modo Tour activo. Haz clic en los museos para agregarlos a tu ruta.';
+        info.textContent = 'Modo Tour activo. Haz clic en los museos para ver su información y añadirlos a la ruta.';
         map.getContainer().style.cursor = 'crosshair';
     }
 
     function clearTour() {
         selectedPlaces = [];
+        currentRouteDetails = null;
         updateTourDisplay();
         layerManager.removeLayer('route');
         layerManager.removeLayer('tourMarkers');
+        closeRouteSidebar();
         info.textContent = 'Tour limpiado.';
         
         // Limpiar información del panel de control
         const existingRouteInfo = layerControls.querySelectorAll('div[style*="margin-top: 10px"]');
         existingRouteInfo.forEach(el => el.remove());
+    }
+
+    function showRouteDetails() {
+        if (!currentRouteDetails) {
+            info.textContent = 'No hay detalles de ruta disponibles.';
+            return;
+        }
+        
+        const { segments, places } = currentRouteDetails;
+        
+        // Calcular estadísticas totales
+        let totalDistance = 0;
+        let totalWalkingDistance = 0;
+        let totalTransportDistance = 0;
+        let totalTransferTime = 0;
+        const allLines = new Set();
+        const transportTypes = new Set();
+        
+        segments.forEach(segment => {
+            if (segment.route && segment.route.summary) {
+                const summary = segment.route.summary;
+                totalDistance += summary.total_distance_km || 0;
+                totalWalkingDistance += summary.walking_distance_km || 0;
+                totalTransportDistance += summary.transport_distance_km || 0;
+                totalTransferTime += summary.total_transfer_time_minutes || 0;
+                
+                if (segment.route.lines_used) {
+                    segment.route.lines_used.forEach(line => {
+                        allLines.add(line.line_id);
+                        transportTypes.add(line.transport_type);
+                    });
+                }
+            }
+        });
+        
+        // Generar contenido detallado
+        let detailsHTML = `
+            <div style="margin-bottom: 15px; padding: 10px; background: #f0f8ff; border-radius: 6px;">
+                <h5 style="margin: 0 0 8px 0; color: #333;">📊 Resumen General</h5>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 12px;">
+                    <div><strong>🎯 Lugares a visitar:</strong> ${places.length}</div>
+                    <div><strong>🛣️ Segmentos de ruta:</strong> ${segments.length}</div>
+                    <div><strong>📏 Distancia total:</strong> ${totalDistance.toFixed(2)} km</div>
+                    <div><strong>🚶 Caminata:</strong> ${totalWalkingDistance.toFixed(2)} km</div>
+                    <div><strong>🚌 En transporte:</strong> ${totalTransportDistance.toFixed(2)} km</div>
+                    <div><strong>🔄 Tiempo transferencias:</strong> ${totalTransferTime.toFixed(0)} min</div>
+                    <div><strong>🚇 Líneas diferentes:</strong> ${allLines.size}</div>
+                    <div><strong>🚊 Tipos transporte:</strong> ${Array.from(transportTypes).join(', ')}</div>
+                </div>
+            </div>
+            
+            <div style="margin-bottom: 15px;">
+                <h5 style="margin: 0 0 10px 0; color: #333;">🗺️ Itinerario Detallado</h5>
+            </div>
+        `;
+        
+        // Añadir detalles de cada segmento
+        segments.forEach((segment, index) => {
+            const from = segment.from;
+            const to = segment.to;
+            const route = segment.route;
+            
+            detailsHTML += `
+                <div style="margin-bottom: 12px; padding: 12px; border: 1px solid #ddd; border-radius: 6px; background: #fafafa;">
+                    <h6 style="margin: 0 0 8px 0; color: #FF5722;">
+                        ${index + 1}. ${from.label || from.id} → ${to.label || to.id}
+                    </h6>
+            `;
+            
+            if (route && route.summary) {
+                const summary = route.summary;
+                detailsHTML += `
+                    <div style="font-size: 11px; margin-bottom: 8px;">
+                        <span style="background: #e3f2fd; padding: 2px 6px; border-radius: 3px; margin-right: 4px;">
+                            📏 ${summary.total_distance_km?.toFixed(2) || 0} km
+                        </span>
+                        <span style="background: #e8f5e8; padding: 2px 6px; border-radius: 3px; margin-right: 4px;">
+                            🚶 ${summary.walking_distance_km?.toFixed(2) || 0} km
+                        </span>
+                        <span style="background: #fff3e0; padding: 2px 6px; border-radius: 3px;">
+                            🚌 ${summary.transport_distance_km?.toFixed(2) || 0} km
+                        </span>
+                    </div>
+                `;
+                
+                // Mostrar líneas utilizadas
+                if (route.lines_used && route.lines_used.length > 0) {
+                    detailsHTML += `
+                        <div style="margin-top: 6px;">
+                            <strong style="font-size: 11px;">🚇 Líneas:</strong>
+                            <div style="margin-top: 4px;">
+                    `;
+                    
+                    route.lines_used.forEach(line => {
+                        const transportIcon = getTransportIcon(line.transport_type);
+                        detailsHTML += `
+                            <span style="display: inline-block; background: #f5f5f5; border: 1px solid #ddd; padding: 3px 8px; border-radius: 12px; margin: 2px; font-size: 10px;">
+                                ${transportIcon} ${line.line_id}
+                            </span>
+                        `;
+                    });
+                    
+                    detailsHTML += `</div></div>`;
+                }
+                
+                // Mostrar pasos detallados si están disponibles
+                if (route.steps && route.steps.length > 0) {
+                    detailsHTML += `
+                        <div style="margin-top: 8px;">
+                            <details style="font-size: 11px;">
+                                <summary style="cursor: pointer; font-weight: bold;">📋 Ver pasos detallados</summary>
+                                <div style="margin-top: 6px; padding-left: 12px;">
+                    `;
+                    
+                    route.steps.forEach((step, stepIndex) => {
+                        const stepIcon = step.type === 'walk' ? '🚶' : step.type === 'transfer' ? '🔄' : '🚌';
+                        detailsHTML += `
+                            <div style="margin: 4px 0; padding: 4px; background: #f9f9f9; border-left: 3px solid #ccc;">
+                                ${stepIndex + 1}. ${stepIcon} ${step.instruction || step.description}
+                                ${step.distance_km ? `<span style="color: #666;"> (${step.distance_km.toFixed(2)} km)</span>` : ''}
+                            </div>
+                        `;
+                    });
+                    
+                    detailsHTML += `</div></details></div>`;
+                }
+            } else {
+                detailsHTML += `<div style="color: #999; font-size: 11px;">No hay detalles disponibles para este segmento</div>`;
+            }
+            
+            detailsHTML += `</div>`;
+        });
+        
+        // Mostrar sidebar de ruta con los detalles
+        routeDetailsContent.innerHTML = detailsHTML;
+        openRouteSidebar();
+        
+        info.textContent = 'Detalles de la ruta mostrados. ¡Buen viaje!';
+    }
+    
+    // Función auxiliar para obtener iconos de transporte
+    function getTransportIcon(transportType) {
+        const icons = {
+            'bus': '🚌',
+            'minibus': '🚐',
+            'taxi': '🚕',
+            'teleferico': '🚠',
+            'metro': '🚇',
+            'tram': '🚊',
+            'walk': '🚶',
+            'transfer': '🔄'
+        };
+        return icons[transportType] || '🚌';
+    }
+
+    // Funciones para controlar la barra lateral
+    function openSidebar() {
+        sidebar.style.left = '0px';
+        openSidebarBtn.style.display = 'none';
+    }
+    
+    function closeSidebar() {
+        sidebar.style.left = '-350px';
+        openSidebarBtn.style.display = 'block';
+        
+        // Cerrar paneles abiertos cuando se cierra el sidebar
+        searchPanel.style.display = 'none';
+        kgSearchPanel.style.display = 'none';
+        enhanceKgPanel.style.display = 'none';
+        analyzeDataPanel.style.display = 'none';
+    }
+
+    // Funciones para controlar el sidebar de ruta
+    function openRouteSidebar() {
+        routeSidebar.style.right = '0px';
+    }
+    
+    function closeRouteSidebar() {
+        routeSidebar.style.right = '-400px';
+    }
+
+    async function searchByEntity() {
+        const entityId = entitySelect.value;
+        const radius = parseFloat(radiusInput.value) || 50;
+        
+        if (!entityId) {
+            info.textContent = 'Selecciona una entidad para buscar.';
+            return;
+        }
+        
+        info.textContent = `Buscando lugares relacionados con ${entitySelect.options[entitySelect.selectedIndex].text}...`;
+        
+        try {
+            // Verificar caché primero
+            let searchData = cache.getEntitySearch(entityId, radius, true, true);
+            
+            if (searchData) {
+                console.log(`Búsqueda de entidad ${entityId} cargada desde caché`);
+                renderEntitySearchResults(searchData);
+            } else {
+                // Realizar nueva búsqueda
+                const searchUrl = `${apiUrl}/search/entity/${entityId}?radius_km=${radius}&include_museums=true&include_transport=true`;
+                
+                const response = await fetch(searchUrl);
+                if (!response.ok) {
+                    throw new Error(`Error en búsqueda: ${response.status} ${response.statusText}`);
+                }
+                
+                searchData = await response.json();
+                console.log('Resultados de búsqueda:', searchData);
+                
+                // Guardar en caché
+                cache.setEntitySearch(entityId, radius, true, true, searchData);
+                
+                renderEntitySearchResults(searchData);
+            }
+            
+        } catch (error) {
+            console.error('Error en búsqueda por entidad:', error);
+            info.textContent = `Error en búsqueda: ${error.message}`;
+        }
+    }
+
+    function renderEntitySearchResults(searchData) {
+        const entity = searchData.entity;
+        const museums = searchData.museums;
+        const transportNetworks = searchData.transport_networks || [];
+        const stats = searchData.statistics;
+        
+        // Centrar mapa en la entidad
+        if (entity && entity.coordinates) {
+            map.setView([entity.coordinates[1], entity.coordinates[0]], 11);
+        }
+        
+        // Limpiar capas anteriores de búsqueda
+        layerManager.removeLayer('search_museums');
+        layerManager.removeLayer('search_transport');
+        layerManager.removeLayer('search_center');
+        
+        // Mostrar centro de búsqueda
+        if (entity && entity.coordinates) {
+            const centerLayer = L.layerGroup();
+            
+            // Marcador del centro
+            const centerMarker = L.circleMarker([entity.coordinates[1], entity.coordinates[0]], {
+                radius: 12,
+                fillColor: '#FF5722',
+                color: '#D84315',
+                weight: 3,
+                opacity: 1,
+                fillOpacity: 0.7
+            });
+            
+            centerMarker.bindPopup(`
+                <strong>🎯 Centro de Búsqueda</strong><br>
+                <strong>${entity.name}</strong><br>
+                Radio: ${entity.search_radius_km} km<br>
+                Área: ${stats.search_area_km2.toFixed(0)} km²
+            `);
+            
+            centerLayer.addLayer(centerMarker);
+            
+            // Círculo de radio de búsqueda
+            const searchCircle = L.circle([entity.coordinates[1], entity.coordinates[0]], {
+                radius: entity.search_radius_km * 1000, // metros
+                fillColor: '#FF5722',
+                color: '#FF5722',
+                weight: 2,
+                opacity: 0.5,
+                fillOpacity: 0.1
+            });
+            
+            centerLayer.addLayer(searchCircle);
+            layerManager.addLayer('search_center', centerLayer, `Centro: ${entity.name}`);
+        }
+        
+        // Mostrar museos encontrados
+        if (museums && museums.features && museums.features.length > 0) {
+            const museumsLayer = L.geoJSON(museums, {
+                pointToLayer: function(feature, latlng) {
+                    return L.circleMarker(latlng, {
+                        radius: 8,
+                        fillColor: '#4CAF50',
+                        color: '#2E7D32',
+                        weight: 2,
+                        opacity: 1,
+                        fillOpacity: 0.8
+                    });
+                },
+                onEachFeature: function(feature, layer) {
+                    const props = feature.properties || {};
+                    const id = props.id || props.qid || feature.id;
+                    const label = props.label || props.name || 'Museo';
+                    const description = props.description;
+                    const distance = props.distance_from_center_km || 'N/A';
+                    
+                    // Verificar si ya está en el tour
+                    const isInTour = selectedPlaces.some(place => place.id === id);
+                    const buttonText = isInTour ? '➖ Quitar de la ruta' : '➕ Añadir a la ruta';
+                    const buttonColor = isInTour ? '#f44336' : '#4CAF50';
+                    
+                    let popupContent = `
+                        <div style="min-width: 200px;">
+                            <h4 style="margin: 0 0 8px 0; color: #333;">🏛️ ${label}</h4>
+                            ${description ? `<p style="margin: 4px 0; font-size: 12px; color: #666;">${description}</p>` : ''}
+                            <p style="margin: 4px 0; font-size: 11px;"><strong>📏 Distancia:</strong> ${distance} km</p>
+                            <p style="margin: 4px 0; font-size: 11px;"><strong>🆔 ID:</strong> ${id || 'N/A'}</p>
+                            <div style="margin-top: 10px; text-align: center;">
+                                <button onclick="window.addToTour('${id}', '${label.replace(/'/g, "\\'")}', [${feature.geometry.coordinates[1]}, ${feature.geometry.coordinates[0]}])" 
+                                        style="background: ${buttonColor}; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                                    ${buttonText}
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                    
+                    layer.bindPopup(popupContent);
+                }
+            });
+            
+            layerManager.addLayer('search_museums', museumsLayer, `Museos (${museums.features.length})`);
+        }
+        
+        // Mostrar redes de transporte encontradas
+        transportNetworks.forEach((network, index) => {
+            if (network.data && network.data.features && network.data.features.length > 0) {
+                const networkLayer = L.geoJSON(network.data, {
+                    style: function(feature) {
+                        const colors = ['#2196F3', '#FF9800', '#9C27B0', '#E91E63', '#795548'];
+                        return {
+                            color: colors[index % colors.length],
+                            weight: 2,
+                            opacity: 0.7
+                        };
+                    },
+                    onEachFeature: function(feature, layer) {
+                        const props = feature.properties || {};
+                        const distance = props.distance_from_center_km || 'N/A';
+                        
+                        layer.bindPopup(`
+                            <strong>🚌 ${network.name}</strong><br>
+                            ${props.line_id || props.name || 'Línea de transporte'}<br>
+                            Distancia: ${distance} km
+                        `);
+                    }
+                });
+                
+                layerManager.addLayer(`search_transport_${index}`, networkLayer, `${network.name} (${network.feature_count})`);
+            }
+        });
+        
+        // Mostrar resumen en el panel
+        showEntitySearchSummary(searchData);
+        
+        // Cerrar panel de búsqueda
+        searchPanel.style.display = 'none';
+        
+        info.textContent = `Búsqueda completada: ${stats.total_museums} museos, ${stats.total_transport_features} elementos de transporte encontrados.`;
+    }
+
+    function showEntitySearchSummary(searchData) {
+        const entity = searchData.entity;
+        const stats = searchData.statistics;
+        const transportNetworks = searchData.transport_networks || [];
+        
+        // Limpiar información previa
+        const existingSearchInfo = layerControls.querySelectorAll('div[data-search-summary="true"]');
+        existingSearchInfo.forEach(el => el.remove());
+        
+        let searchInfo = `<div data-search-summary="true" style="margin-top: 10px; padding: 10px; background: #fff3e0; border: 1px solid #ff9800; border-radius: 4px;">
+            <h5 style="margin: 0 0 8px 0; color: #333;">🔍 Búsqueda: ${entity.name}</h5>
+            <div style="font-size: 12px; line-height: 1.4;">
+                <div><strong>Radio de búsqueda:</strong> ${entity.search_radius_km} km</div>
+                <div><strong>Área total:</strong> ${stats.search_area_km2.toFixed(0)} km²</div>
+                <div><strong>Museos encontrados:</strong> ${stats.total_museums}</div>
+                <div><strong>Elementos de transporte:</strong> ${stats.total_transport_features}</div>
+            </div>
+        </div>`;
+        
+        if (transportNetworks.length > 0) {
+            searchInfo += `<div data-search-summary="true" style="margin-top: 8px; padding: 10px; background: #fff3e0; border: 1px solid #ff9800; border-radius: 4px;">
+                <h5 style="margin: 0 0 8px 0; color: #333;">🚌 Redes de Transporte</h5>
+                <div style="font-size: 11px;">`;
+            
+            transportNetworks.forEach(network => {
+                if (!network.error) {
+                    searchInfo += `
+                        <div style="margin-bottom: 4px;">
+                            <strong>${network.name}:</strong> ${network.feature_count} elementos
+                        </div>`;
+                }
+            });
+            
+            searchInfo += `</div></div>`;
+        }
+        
+        layerControls.innerHTML += searchInfo;
+    }
+
+    async function searchKnowledgeGraph() {
+        const query = kgQueryInput.value.trim();
+        const entityType = kgTypeFilter.value;
+        
+        if (!query) {
+            info.textContent = 'Ingresa un término de búsqueda.';
+            return;
+        }
+        
+        if (query.length < 2) {
+            info.textContent = 'El término de búsqueda debe tener al menos 2 caracteres.';
+            return;
+        }
+        
+        info.textContent = `Buscando "${query}" en el knowledge graph...`;
+        kgSearchResults.innerHTML = '<div style="padding:10px; text-align:center;">🔍 Buscando...</div>';
+        
+        try {
+            // Verificar caché primero
+            let searchData = cache.getKgSearch(query, entityType);
+            
+            if (searchData) {
+                console.log('Búsqueda KG cargada desde caché');
+                renderKgSearchResults(searchData);
+            } else {
+                // Realizar nueva búsqueda
+                const searchUrl = `${apiUrl}/kg/search?query=${encodeURIComponent(query)}&limit=50${entityType ? `&entity_type=${entityType}` : ''}`;
+                
+                const response = await fetch(searchUrl);
+                if (!response.ok) {
+                    throw new Error(`Error en búsqueda KG: ${response.status} ${response.statusText}`);
+                }
+                
+                searchData = await response.json();
+                console.log('Resultados búsqueda KG:', searchData);
+                
+                // Guardar en caché
+                cache.setKgSearch(query, entityType, searchData);
+                
+                renderKgSearchResults(searchData);
+            }
+            
+        } catch (error) {
+            console.error('Error en búsqueda KG:', error);
+            info.textContent = `Error en búsqueda: ${error.message}`;
+            kgSearchResults.innerHTML = `<div style="padding:10px; color:red;">❌ Error: ${error.message}</div>`;
+        }
+    }
+
+    function renderKgSearchResults(searchData) {
+        const results = searchData.results || [];
+        
+        if (results.length === 0) {
+            kgSearchResults.innerHTML = '<div style="padding:10px; color:#666;">🔍 No se encontraron resultados.</div>';
+            info.textContent = `Sin resultados para "${searchData.query}"`;
+            return;
+        }
+        
+        let resultsHtml = `<div style="margin-bottom:8px; font-weight:bold;">
+            ${results.length} resultado${results.length > 1 ? 's' : ''} encontrado${results.length > 1 ? 's' : ''}:
+        </div>`;
+        
+        results.forEach((result, index) => {
+            const entity = result.entity_data;
+            const summary = result.summary;
+            const kgId = result.kg_id;
+            
+            // Determinar ícono según el tipo
+            let icon = '📄';
+            if (summary.type === 'process_instance') icon = '⚙️';
+            else if (summary.type === 'asset') icon = '💾';
+            
+            // Determinar color según relevancia
+            const relevance = result.relevance_score || 0;
+            let bgColor = '#f5f5f5';
+            if (relevance > 80) bgColor = '#e8f5e8';
+            else if (relevance > 50) bgColor = '#fff3e0';
+            
+            resultsHtml += `
+                <div style="margin-bottom:8px; padding:10px; border:1px solid #ddd; border-radius:4px; background:${bgColor}; cursor:pointer;"
+                     onclick="showEntityDetails('${kgId}')" title="Click para ver detalles">
+                    <div style="display:flex; justify-content:space-between; align-items:start;">
+                        <div style="flex:1;">
+                            <div style="font-weight:bold; color:#333;">
+                                ${icon} ${summary.title || 'Sin título'}
+                            </div>
+                            <div style="font-size:11px; color:#666; margin:4px 0;">
+                                Tipo: ${summary.type || 'unknown'} | Relevancia: ${relevance}%
+                            </div>
+                            <div style="font-size:12px; color:#555; line-height:1.3;">
+                                ${summary.description || 'Sin descripción'}
+                            </div>
+                            ${summary.owner ? `<div style="font-size:10px; color:#888; margin-top:4px;">Owner: ${summary.owner}</div>` : ''}
+                        </div>
+                        <div style="margin-left:8px; font-size:10px; color:#999;">
+                            ${summary.created_at ? new Date(summary.created_at).toLocaleDateString() : ''}
+                        </div>
+                    </div>
+                </div>`;
+        });
+        
+        kgSearchResults.innerHTML = resultsHtml;
+        info.textContent = `${results.length} resultado${results.length > 1 ? 's' : ''} encontrado${results.length > 1 ? 's' : ''} para "${searchData.query}"`;
+    }
+
+    async function showEntityDetails(entityId) {
+        info.textContent = `Cargando detalles de la entidad...`;
+        
+        try {
+            // Verificar caché primero
+            let entityData = cache.getKgEntity(entityId);
+            
+            if (entityData) {
+                console.log('Detalles de entidad cargados desde caché');
+                renderEntityDetails(entityData);
+            } else {
+                // Cargar detalles de la entidad
+                const detailsUrl = `${apiUrl}/kg/entity/${entityId}?include_related=true`;
+                
+                const response = await fetch(detailsUrl);
+                if (!response.ok) {
+                    throw new Error(`Error cargando entidad: ${response.status} ${response.statusText}`);
+                }
+                
+                entityData = await response.json();
+                console.log('Detalles de entidad:', entityData);
+                
+                // Guardar en caché
+                cache.setKgEntity(entityId, entityData);
+                
+                renderEntityDetails(entityData);
+            }
+            
+        } catch (error) {
+            console.error('Error cargando detalles:', error);
+            info.textContent = `Error cargando detalles: ${error.message}`;
+        }
+    }
+
+    function renderEntityDetails(entityData) {
+        const entity = entityData.entity_data;
+        const summary = entityData.summary;
+        const related = entityData.related_entities || [];
+        const files = entityData.files_and_datasets || [];
+        const processes = entityData.processes || [];
+        
+        // Cerrar paneles de búsqueda
+        kgSearchPanel.style.display = 'none';
+        searchPanel.style.display = 'none';
+        
+        // Limpiar información previa de entidades
+        const existingEntityInfo = layerControls.querySelectorAll('div[data-entity-details="true"]');
+        existingEntityInfo.forEach(el => el.remove());
+        
+        // Determinar ícono
+        let icon = '📄';
+        if (summary.type === 'process_instance') icon = '⚙️';
+        else if (summary.type === 'asset') icon = '💾';
+        
+        let entityInfo = `<div data-entity-details="true" style="margin-top: 10px; padding: 10px; background: #f3e5f5; border: 1px solid #9c27b0; border-radius: 4px;">
+            <h5 style="margin: 0 0 8px 0; color: #333;">${icon} ${summary.title || 'Entidad'}</h5>
+            <div style="font-size: 12px; line-height: 1.4;">
+                <div><strong>Tipo:</strong> ${summary.type || 'unknown'}</div>
+                <div><strong>ID:</strong> ${entityData.entity_id}</div>
+                ${summary.owner ? `<div><strong>Propietario:</strong> ${summary.owner}</div>` : ''}
+                ${summary.created_at ? `<div><strong>Creado:</strong> ${new Date(summary.created_at).toLocaleDateString()}</div>` : ''}
+                <div style="margin-top:6px;"><strong>Descripción:</strong><br>${summary.description || 'Sin descripción'}</div>
+            </div>
+        </div>`;
+        
+        // Mostrar archivos/datasets relacionados
+        if (files.length > 0) {
+            entityInfo += `<div data-entity-details="true" style="margin-top: 8px; padding: 10px; background: #f3e5f5; border: 1px solid #9c27b0; border-radius: 4px;">
+                <h5 style="margin: 0 0 8px 0; color: #333;">💾 Archivos y Datasets</h5>
+                <div style="font-size: 11px;">`;
+            
+            files.forEach(file => {
+                const exists = file.exists ? '✅' : '❌';
+                const uri = file.uri || 'N/A';
+                const shortUri = uri.length > 50 ? uri.substring(0, 47) + '...' : uri;
+                
+                entityInfo += `
+                    <div style="margin-bottom: 4px; padding: 4px; background: #fafafa; border-radius: 2px;">
+                        ${exists} <strong>${file.kind || 'file'}:</strong><br>
+                        <span style="font-family: monospace; font-size: 10px; color: #666;">${shortUri}</span>
+                    </div>`;
+            });
+            
+            entityInfo += `</div></div>`;
+        }
+        
+        // Mostrar entidades relacionadas
+        if (related.length > 0) {
+            entityInfo += `<div data-entity-details="true" style="margin-top: 8px; padding: 10px; background: #f3e5f5; border: 1px solid #9c27b0; border-radius: 4px;">
+                <h5 style="margin: 0 0 8px 0; color: #333;">🔗 Entidades Relacionadas</h5>
+                <div style="font-size: 11px;">`;
+            
+            related.forEach(rel => {
+                const relSummary = rel.summary;
+                let relIcon = '📄';
+                if (relSummary.type === 'process_instance') relIcon = '⚙️';
+                else if (relSummary.type === 'asset') relIcon = '💾';
+                
+                entityInfo += `
+                    <div style="margin-bottom: 4px; padding: 4px; background: #fafafa; border-radius: 2px; cursor: pointer;"
+                         onclick="showEntityDetails('${rel.entity_id}')" title="Click para ver detalles">
+                        ${relIcon} <strong>${relSummary.title || 'Sin título'}</strong><br>
+                        <span style="color: #666;">Relación: ${rel.relationship}</span><br>
+                        <span style="font-size: 10px; color: #888;">${relSummary.description || 'Sin descripción'}</span>
+                    </div>`;
+            });
+            
+            entityInfo += `</div></div>`;
+        }
+        
+        // Mostrar procesos relacionados
+        if (processes.length > 0) {
+            entityInfo += `<div data-entity-details="true" style="margin-top: 8px; padding: 10px; background: #f3e5f5; border: 1px solid #9c27b0; border-radius: 4px;">
+                <h5 style="margin: 0 0 8px 0; color: #333;">⚙️ Procesos Relacionados</h5>
+                <div style="font-size: 11px;">`;
+            
+            processes.forEach(proc => {
+                const status = proc.status || 'unknown';
+                const statusColor = status === 'success' ? '#4caf50' : status === 'error' ? '#f44336' : '#ff9800';
+                
+                entityInfo += `
+                    <div style="margin-bottom: 4px; padding: 4px; background: #fafafa; border-radius: 2px;">
+                        ⚙️ <strong>${proc.process_class || 'Proceso'}</strong><br>
+                        <span style="color: #666;">Relación: ${proc.relationship}</span><br>
+                        <span style="color: ${statusColor}; font-weight: bold;">Estado: ${status}</span><br>
+                        ${proc.executed_at ? `<span style="font-size: 10px; color: #888;">Ejecutado: ${new Date(proc.executed_at).toLocaleDateString()}</span>` : ''}
+                    </div>`;
+            });
+            
+            entityInfo += `</div></div>`;
+        }
+        
+        layerControls.innerHTML += entityInfo;
+        info.textContent = `Detalles cargados para ${summary.title || 'entidad'}: ${related.length} relaciones, ${files.length} archivos, ${processes.length} procesos`;
+    }
+
+    function clearEntityDetails() {
+        const existingEntityInfo = layerControls.querySelectorAll('div[data-entity-details="true"]');
+        existingEntityInfo.forEach(el => el.remove());
+    }
+
+    async function searchExternalEntities() {
+        const query = externalQueryInput.value.trim();
+        const source = externalSourceSelect.value;
+        
+        if (!query) {
+            info.textContent = 'Ingresa un término de búsqueda.';
+            return;
+        }
+        
+        info.textContent = `Buscando "${query}" en ${source}...`;
+        externalResults.innerHTML = '<div style="padding:10px; text-align:center;">🔍 Buscando en KG externo...</div>';
+        
+        try {
+            const searchUrl = `${apiUrl}/kg/entities/external?query=${encodeURIComponent(query)}&source=${source}&limit=10`;
+            
+            const response = await fetch(searchUrl);
+            if (!response.ok) {
+                throw new Error(`Error en búsqueda externa: ${response.status} ${response.statusText}`);
+            }
+            
+            const searchData = await response.json();
+            console.log('Resultados búsqueda externa:', searchData);
+            
+            renderExternalResults(searchData);
+            
+        } catch (error) {
+            console.error('Error en búsqueda externa:', error);
+            info.textContent = `Error en búsqueda externa: ${error.message}`;
+            externalResults.innerHTML = `<div style="padding:10px; color:red;">❌ Error: ${error.message}</div>`;
+        }
+    }
+
+    function renderExternalResults(searchData) {
+        const results = searchData.results || [];
+        
+        if (results.length === 0) {
+            externalResults.innerHTML = '<div style="padding:10px; color:#666;">🔍 No se encontraron entidades externas.</div>';
+            info.textContent = `Sin resultados externos para "${searchData.query}"`;
+            return;
+        }
+        
+        let resultsHtml = `<div style="margin-bottom:8px; font-weight:bold;">
+            ${results.length} entidad${results.length > 1 ? 'es' : ''} encontrada${results.length > 1 ? 's' : ''} en ${searchData.source}:
+        </div>`;
+        
+        results.forEach((result, index) => {
+            resultsHtml += `
+                <div style="margin-bottom:8px; padding:10px; border:1px solid #ddd; border-radius:4px; background:#f9f9f9;">
+                    <div style="font-weight:bold; color:#333;">
+                        🌐 ${result.title || 'Sin título'}
+                    </div>
+                    <div style="font-size:11px; color:#666; margin:4px 0;">
+                        ID: ${result.external_id} | Fuente: ${result.source}
+                    </div>
+                    <div style="font-size:12px; color:#555; line-height:1.3;">
+                        ${result.description || 'Sin descripción'}
+                    </div>
+                    ${result.url ? `<div style="font-size:10px; margin-top:4px;"><a href="${result.url}" target="_blank" style="color:#2196f3;">Ver en ${result.source}</a></div>` : ''}
+                    <div style="margin-top:8px;">
+                        <button onclick="createLocalEntity('${result.external_id}', '${result.source}', '${(result.title || '').replace(/'/g, "\\'")}', '${(result.description || '').replace(/'/g, "\\'")}')" 
+                                style="background:#4caf50; color:white; padding:4px 8px; border:none; border-radius:4px; cursor:pointer; font-size:11px;">
+                            ➕ Crear Entidad Local
+                        </button>
+                    </div>
+                </div>`;
+        });
+        
+        externalResults.innerHTML = resultsHtml;
+        info.textContent = `${results.length} entidad${results.length > 1 ? 'es' : ''} externa${results.length > 1 ? 's' : ''} encontrada${results.length > 1 ? 's' : ''} en ${searchData.source}`;
+    }
+
+    async function createLocalEntity(externalId, source, title, description) {
+        try {
+            info.textContent = 'Creando entidad local...';
+            
+            const entityData = {
+                title: title,
+                type: 'ExternalEntity',
+                description: description,
+                external_links: [{
+                    external_id: externalId,
+                    source: source,
+                    confidence: 0.9,
+                    relation_type: 'same_as'
+                }],
+                properties: {
+                    source_kg: source
+                },
+                created_by: 'user'
+            };
+            
+            const response = await fetch(`${apiUrl}/kg/entities/create`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(entityData)
+            });
+            
+            if (!response.ok) {
+                throw new Error(`Error creando entidad: ${response.status}`);
+            }
+            
+            const result = await response.json();
+            console.log('Entidad creada:', result);
+            
+            info.textContent = `✅ Entidad "${title}" creada exitosamente en el KG local`;
+            
+        } catch (error) {
+            console.error('Error creando entidad:', error);
+            info.textContent = `❌ Error creando entidad: ${error.message}`;
+        }
+    }
+
+    async function analyzeDataset() {
+        const selectedDataset = datasetSelect.value;
+        const autoEnhance = autoEnhanceCheck.checked;
+        
+        if (!selectedDataset) {
+            info.textContent = 'Selecciona un dataset para analizar.';
+            return;
+        }
+        
+        info.textContent = `Analizando ${selectedDataset}...`;
+        analysisResults.innerHTML = '<div style="padding:10px; text-align:center;">📊 Analizando estructura de datos...</div>';
+        
+        try {
+            const analysisData = {
+                dataset_path: selectedDataset
+            };
+            
+            const response = await fetch(`${apiUrl}/kg/describe/dataset`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(analysisData)
+            });
+            
+            if (!response.ok) {
+                throw new Error(`Error en análisis: ${response.status} ${response.statusText}`);
+            }
+            
+            const result = await response.json();
+            console.log('Análisis de dataset:', result);
+            
+            renderAnalysisResults(result);
+            
+        } catch (error) {
+            console.error('Error en análisis:', error);
+            info.textContent = `Error en análisis: ${error.message}`;
+            analysisResults.innerHTML = `<div style="padding:10px; color:red;">❌ Error: ${error.message}</div>`;
+        }
+    }
+
+    function renderAnalysisResults(analysisData) {
+        const columns = analysisData.columns || [];
+        const descriptions = analysisData.descriptions || {};
+        
+        if (columns.length === 0) {
+            analysisResults.innerHTML = '<div style="padding:10px; color:#666;">📄 No se pudieron extraer columnas del dataset.</div>';
+            return;
+        }
+        
+        let resultsHtml = `<div style="margin-bottom:12px; font-weight:bold;">
+            📊 Análisis de ${columns.length} columna${columns.length > 1 ? 's' : ''} en ${analysisData.dataset_path}:
+        </div>`;
+        
+        columns.forEach(column => {
+            const desc = descriptions[column] || {};
+            const semanticMatches = desc.semantic_meaning || [];
+            const relatedEntities = desc.related_entities || [];
+            
+            resultsHtml += `
+                <div style="margin-bottom:12px; padding:12px; border:1px solid #ddd; border-radius:6px; background:#fafafa;">
+                    <div style="font-weight:bold; color:#333; margin-bottom:6px;">
+                        📋 Columna: ${column}
+                    </div>
+                    <div style="margin-bottom:4px;">
+                        <strong>Tipo inferido:</strong> <span style="color:#2196f3;">${desc.inferred_type || 'general'}</span>
+                    </div>
+                    <div style="margin-bottom:6px; font-size:12px; color:#555;">
+                        ${desc.suggested_description || 'Sin descripción generada'}
+                    </div>
+                    
+                    ${semanticMatches.length > 0 ? `
+                    <div style="margin-top:8px;">
+                        <strong style="font-size:11px;">🔗 Coincidencias semánticas:</strong>
+                        <div style="margin-top:4px;">
+                            ${semanticMatches.slice(0, 3).map(match => `
+                                <span style="display:inline-block; background:#e3f2fd; padding:2px 6px; border-radius:3px; font-size:10px; margin:2px;">
+                                    ${match.entity_title || 'Sin título'} (${Math.round(match.confidence * 100)}%)
+                                </span>
+                            `).join('')}
+                        </div>
+                    </div>` : ''}
+                    
+                    ${relatedEntities.length > 0 ? `
+                    <div style="margin-top:8px;">
+                        <strong style="font-size:11px;">📊 Entidades relacionadas:</strong>
+                        <div style="margin-top:4px;">
+                            ${relatedEntities.slice(0, 3).map(entity => `
+                                <span style="display:inline-block; background:#e8f5e9; padding:2px 6px; border-radius:3px; font-size:10px; margin:2px; cursor:pointer;"
+                                      onclick="showEntityDetails('${entity.entity_id}')" title="Click para ver detalles">
+                                    ${entity.entity_title || 'Sin título'} (${Math.round(entity.similarity * 100)}%)
+                                </span>
+                            `).join('')}
+                        </div>
+                    </div>` : ''}
+                </div>`;
+        });
+        
+        analysisResults.innerHTML = resultsHtml;
+        info.textContent = `✅ Análisis completado: ${columns.length} columnas analizadas`;
     }
 
     async function calculateTourRoute() {
@@ -255,6 +1393,14 @@ Un dashboard mínimo que usa Quarto con una celda OJS para pedir al servidor loc
                     features: allRouteFeatures
                 };
                 
+                // Guardar detalles de la ruta para el botón "Iniciar Ruta"
+                currentRouteDetails = {
+                    segments: routeSegments,
+                    places: [...selectedPlaces],
+                    completeRoute: completeRoute,
+                    calculatedAt: new Date()
+                };
+                
                 renderTourRoute(completeRoute, routeSegments);
                 
                 // Mostrar resumen del tour
@@ -272,8 +1418,13 @@ Un dashboard mínimo que usa Quarto con una celda OJS para pedir al servidor loc
                     }
                 });
                 
+                // Actualizar display del tour para mostrar el botón
+                updateTourDisplay();
+                
                 info.textContent = `Tour completo: ${selectedPlaces.length} lugares, ${totalDistance.toFixed(2)} km total, ${allLines.size} líneas de transporte`;
             } else {
+                currentRouteDetails = null;
+                updateTourDisplay();
                 info.textContent = 'No se pudo calcular la ruta del tour.';
             }
             
@@ -528,7 +1679,10 @@ Un dashboard mínimo que usa Quarto con una celda OJS para pedir al servidor loc
             network_igm: { layer: null, name: 'Caminos IGM', visible: false, zIndex: 5, color: '#795548' },
             nodes: { layer: null, name: 'Museos', visible: true, zIndex: 6, color: '#4CAF50' },
             route: { layer: null, name: 'Ruta calculada', visible: true, zIndex: 7, color: '#F44336' },
-            tourMarkers: { layer: null, name: 'Lugares seleccionados', visible: true, zIndex: 8, color: '#FF5722' }
+            tourMarkers: { layer: null, name: 'Lugares seleccionados', visible: true, zIndex: 8, color: '#FF5722' },
+            search_center: { layer: null, name: 'Centro de búsqueda', visible: true, zIndex: 9, color: '#FF5722' },
+            search_museums: { layer: null, name: 'Museos encontrados', visible: true, zIndex: 10, color: '#4CAF50' },
+            search_transport: { layer: null, name: 'Transporte encontrado', visible: true, zIndex: 11, color: '#2196F3' }
         },
         
         // Configuración de datasets disponibles
@@ -566,9 +1720,32 @@ Un dashboard mínimo que usa Quarto con una celda OJS para pedir al servidor loc
         },
         
         addLayer(key, layer, name) {
+            // Si es una capa de búsqueda de transporte dinámico, crear entrada dinámicamente
+            if (key.startsWith('search_transport_') && !this.layers[key]) {
+                this.layers[key] = {
+                    layer: null,
+                    name: name || 'Transporte búsqueda',
+                    visible: true,
+                    zIndex: 11 + parseInt(key.split('_')[2] || 0),
+                    color: '#2196F3'
+                };
+            }
+            
             if (this.layers[key] && this.layers[key].layer) {
                 map.removeLayer(this.layers[key].layer);
             }
+            
+            if (!this.layers[key]) {
+                // Crear entrada para capas dinámicas
+                this.layers[key] = {
+                    layer: null,
+                    name: name || key,
+                    visible: true,
+                    zIndex: Object.keys(this.layers).length + 1,
+                    color: '#666666'
+                };
+            }
+            
             this.layers[key].layer = layer;
             if (name) this.layers[key].name = name;
             
@@ -886,41 +2063,33 @@ Un dashboard mínimo que usa Quarto con una celda OJS para pedir al servidor loc
             onEachFeature: function (feature, layer) {
                 const id = feature.properties && (feature.properties.id || feature.properties.qid || feature.id);
                 const label = feature.properties && (feature.properties.label || feature.properties.name || id);
+                const description = feature.properties && feature.properties.description;
+                const address = feature.properties && feature.properties.address;
+                const wikidata = feature.properties && feature.properties.wikidata;
                 
-                layer.bindPopup(String(label));
+                // Crear contenido del popup con información detallada y botón
+                const isInTour = selectedPlaces.some(place => place.id === id);
+                const buttonText = isInTour ? '➖ Quitar de la ruta' : '➕ Añadir a la ruta';
+                const buttonColor = isInTour ? '#f44336' : '#4CAF50';
                 
-                // Agregar manejo de clics para el modo tour (siempre activo)
-                layer.on('click', function(e) {
-                    e.originalEvent.stopPropagation();
-                    
-                    const placeInfo = {
-                        id: id,
-                        label: label,
-                        coordinates: [e.latlng.lng, e.latlng.lat], // [lon, lat] para GeoJSON
-                        latlng: e.latlng
-                    };
-                    
-                    // Verificar si ya está seleccionado
-                    const existingIndex = selectedPlaces.findIndex(place => place.id === id);
-                    
-                    if (existingIndex >= 0) {
-                        // Eliminar si ya está seleccionado
-                        selectedPlaces.splice(existingIndex, 1);
-                        info.textContent = `${label} eliminado del tour.`;
-                    } else {
-                        // Agregar al tour
-                        selectedPlaces.push(placeInfo);
-                        info.textContent = `${label} agregado al tour.`;
-                    }
-                    
-                    updateTourDisplay();
-                    updateTourMarkers();
-                    
-                    // Auto-calcular ruta si hay al menos 2 lugares
-                    if (selectedPlaces.length >= 2) {
-                        setTimeout(calculateTourRoute, 500); // Pequeño delay para mejor UX
-                    }
-                });
+                let popupContent = `
+                    <div style="min-width: 200px;">
+                        <h4 style="margin: 0 0 8px 0; color: #333;">${label}</h4>
+                        ${description ? `<p style="margin: 4px 0; font-size: 12px; color: #666;">${description}</p>` : ''}
+                        ${address ? `<p style="margin: 4px 0; font-size: 11px;"><strong>📍 Dirección:</strong> ${address}</p>` : ''}
+                        ${wikidata ? `<p style="margin: 4px 0; font-size: 11px;"><strong>🌐 Wikidata:</strong> ${wikidata}</p>` : ''}
+                        <div style="margin-top: 10px; text-align: center;">
+                            <button onclick="window.addToTour('${id}', '${label.replace(/'/g, "\\'")}', [${feature.geometry.coordinates[1]}, ${feature.geometry.coordinates[0]}])" 
+                                    style="background: ${buttonColor}; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                                ${buttonText}
+                            </button>
+                        </div>
+                    </div>
+                `;
+                
+                layer.bindPopup(popupContent);
+                
+                // Remover el manejo automático de clics - ahora solo se usa el botón del popup
             }
         });
         
@@ -1302,6 +2471,30 @@ Un dashboard mínimo que usa Quarto con una celda OJS para pedir al servidor loc
     
     clearTourBtn.addEventListener('click', clearTour);
     
+    // Event listeners para la barra lateral
+    openSidebarBtn.addEventListener('click', openSidebar);
+    closeSidebarBtn.addEventListener('click', closeSidebar);
+    
+    // Event listeners para el sidebar de ruta
+    startRouteBtn.addEventListener('click', showRouteDetails);
+    closeRouteSidebarBtn.addEventListener('click', closeRouteSidebar);
+    
+    // Cerrar sidebar al hacer clic fuera de él
+    document.addEventListener('click', (e) => {
+        if (sidebar.style.left === '0px' && 
+            !sidebar.contains(e.target) && 
+            !openSidebarBtn.contains(e.target)) {
+            closeSidebar();
+        }
+        
+        // También cerrar sidebar de ruta al hacer clic fuera
+        if (routeSidebar.style.right === '0px' && 
+            !routeSidebar.contains(e.target) && 
+            !routeButtonContainer.contains(e.target)) {
+            closeRouteSidebar();
+        }
+    });
+    
     // Event listener para cargar capas
     loadLayersBtn.addEventListener('click', () => {
         layerManager.showLayerLoadingPanel();
@@ -1313,6 +2506,7 @@ Un dashboard mínimo que usa Quarto con una celda OJS para pedir al servidor loc
         cache.museums = null;
         cache.datasets.clear();
         cache.routes.clear();
+        cache.entitySearches.clear();
         localStorage.removeItem('museos_cache');
         
         info.textContent = 'Caché limpiado completamente. Los datos se recargarán la próxima vez.';
@@ -1322,6 +2516,88 @@ Un dashboard mínimo que usa Quarto con una celda OJS para pedir al servidor loc
             refreshBtn.click();
         }, 1000);
     });
+    
+    // Event listeners para búsqueda por entidad
+    searchEntityBtn.addEventListener('click', () => {
+        searchPanel.style.display = searchPanel.style.display === 'none' ? 'block' : 'none';
+        kgSearchPanel.style.display = 'none'; // Cerrar panel KG si está abierto
+    });
+    
+    closeSearchBtn.addEventListener('click', () => {
+        searchPanel.style.display = 'none';
+        clearEntityDetails();
+    });
+    
+    executeSearchBtn.addEventListener('click', searchByEntity);
+    
+    // Permitir búsqueda con Enter en el select
+    entitySelect.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            searchByEntity();
+        }
+    });
+    
+    radiusInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            searchByEntity();
+        }
+    });
+    
+    // Event listeners para búsqueda en Knowledge Graph
+    searchKgBtn.addEventListener('click', () => {
+        kgSearchPanel.style.display = kgSearchPanel.style.display === 'none' ? 'block' : 'none';
+        searchPanel.style.display = 'none'; // Cerrar panel de entidad si está abierto
+        enhanceKgPanel.style.display = 'none'; // Cerrar otros paneles
+        analyzeDataPanel.style.display = 'none';
+    });
+    
+    closeKgSearchBtn.addEventListener('click', () => {
+        kgSearchPanel.style.display = 'none';
+        clearEntityDetails();
+    });
+    
+    executeKgSearchBtn.addEventListener('click', searchKnowledgeGraph);
+    
+    // Permitir búsqueda con Enter en el input de KG
+    kgQueryInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            searchKnowledgeGraph();
+        }
+    });
+    
+    // Event listeners para enriquecimiento con KG externo
+    enhanceKgBtn.addEventListener('click', () => {
+        enhanceKgPanel.style.display = enhanceKgPanel.style.display === 'none' ? 'block' : 'none';
+        searchPanel.style.display = 'none';
+        kgSearchPanel.style.display = 'none';
+        analyzeDataPanel.style.display = 'none';
+    });
+    
+    closeEnhanceBtn.addEventListener('click', () => {
+        enhanceKgPanel.style.display = 'none';
+    });
+    
+    searchExternalBtn.addEventListener('click', searchExternalEntities);
+    
+    externalQueryInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            searchExternalEntities();
+        }
+    });
+    
+    // Event listeners para análisis de datos
+    analyzeDataBtn.addEventListener('click', () => {
+        analyzeDataPanel.style.display = analyzeDataPanel.style.display === 'none' ? 'block' : 'none';
+        searchPanel.style.display = 'none';
+        kgSearchPanel.style.display = 'none';
+        enhanceKgPanel.style.display = 'none';
+    });
+    
+    closeAnalyzeBtn.addEventListener('click', () => {
+        analyzeDataPanel.style.display = 'none';
+    });
+    
+    analyzeBtn.addEventListener('click', analyzeDataset);
 
 })();
 ```
