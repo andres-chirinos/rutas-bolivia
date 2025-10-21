@@ -413,23 +413,23 @@ def fetch_museums_bolivia_generalized(
     Ahora usa el sistema de assets.
     """
     query = """
-SELECT DISTINCT ?item ?itemLabel ?coord ?typeLabel WHERE {
-  SERVICE wikibase:around {
-    ?item wdt:P625 ?coord .
-    bd:serviceParam wikibase:center "Point(-68.1305956 -16.5044756)"^^geo:wktLiteral .
-    bd:serviceParam wikibase:radius "25" .
-  }
+    SELECT DISTINCT ?item ?itemLabel ?coord ?typeLabel WHERE {
+        SERVICE wikibase:around {
+            ?item wdt:P625 ?coord .
+            bd:serviceParam wikibase:center "Point(-68.1305956 -16.5044756)"^^geo:wktLiteral .
+            bd:serviceParam wikibase:radius "25" .
+        }
 
-  ?item wdt:P31 ?type .
-  FILTER(?type IN (
-    wd:Q33506, wd:Q570116, wd:Q4989906, wd:Q174782, wd:Q839954,
-    wd:Q8514, wd:Q16970, wd:Q16560, wd:Q124757, wd:Q166118,
-    wd:Q46169, wd:Q8502
-  )).
-  ?item wdt:P17 wd:Q750 .
+        ?item wdt:P31 ?type .
+        FILTER(?type IN (
+            wd:Q33506, wd:Q570116, wd:Q4989906, wd:Q174782, wd:Q839954,
+            wd:Q8514, wd:Q16970, wd:Q16560, wd:Q124757, wd:Q166118,
+            wd:Q46169, wd:Q8502
+        )).
+        ?item wdt:P17 wd:Q750 .
 
-  SERVICE wikibase:label { bd:serviceParam wikibase:language "es,en". }
-}
+        SERVICE wikibase:label { bd:serviceParam wikibase:language "es,en". }
+    }
     """
 
     result = fetch_wikidata_query(
