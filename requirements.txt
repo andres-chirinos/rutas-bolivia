@@ -1,0 +1,6 @@
+# Minimal requirements for running tests and optional CLI
+typer[all]
+requests
+cryptography
+networkx
+shapely
