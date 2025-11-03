@@ -1,0 +1,43 @@
+version: "3.8"
+
+services:
+  datamesh-api:
+    build:
+      context: .
+      dockerfile: dockerfile
+    container_name: datamesh-rutas-bolivia
+    ports:
+      - "8000:8000"
+    volumes:
+      # Montar código fuente para desarrollo (opcional)
+      # - ./src:/src
+      # Montar archivos estáticos
+      - ./static:/static
+      # Montar datos y cache
+      - ./data_store:/data_store
+      - ./dummy_datasets:/dummy_datasets
+      # Montar plugins
+      - ./plugins:/plugins
+      # Cache persistente
+      - datamesh_cache:/cache
+    environment:
+      - PYTHONPATH=/src
+      - FASTAPI_ENV=production
+      - CACHE_DIR=/src/cache
+    networks:
+      - datamesh-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  datamesh-network:
+    driver: bridge
+
+volumes:
+  datamesh_cache:
+    driver: local
