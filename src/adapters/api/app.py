@@ -15,7 +15,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
-from typing import Optional, Any, Dict
+from typing import Optional, Any, Dict, List
 from datetime import datetime
 import importlib
 import os
@@ -25,6 +25,7 @@ import tempfile
 import uuid
 import re
 from math import radians, cos, sin, asin, sqrt
+from src.core.services.route_planner import RoutePlanner
 
 app = FastAPI(title="Datamesh Client API")
 app.add_middleware(
@@ -35,7 +36,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DEFAULT_NETWORK = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "dummy_datasets", "puma_katari.geojson")
+DEFAULT_NETWORK = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "dummy_datasets", "rutas_recorridos_2025.geojson")
 
 @app.get("/health")
 async def health():
@@ -189,6 +190,57 @@ async def demo_museums(src: str = Query(...), dst: str = Query(...), network: Op
 
     # route_result may already contain 'route_geojson' or be a GeoJSON itself
     return JSONResponse(content={"nodes": nodes_json, "network": network_json, "route": route_result})
+
+
+@app.get("/route/coords")
+async def route_by_coords(
+    src: str = Query(..., description="Source coordinates as 'lon,lat'"),
+    dst: str = Query(..., description="Destination coordinates as 'lon,lat'"),
+    network: Optional[List[str]] = Query(None, description="One or more paths to lines GeoJSON. Provide multiple 'network' query params or a single comma-separated value."),
+    planner: str = Query("astar", description="Planner to use: 'astar' or 'plugin'"),
+):
+    """Compute a route between two coordinates and return detailed distances and route geometry.
+
+    Query parameters:
+      - src: 'lon,lat'
+      - dst: 'lon,lat'
+      - network: optional path to lines GeoJSON (defaults to bundled network)
+      - planner: 'astar' (default) or 'plugin'
+    """
+    # parse coordinates
+    def _parse_coord(s: str):
+        parts = re.split(r"\s*,\s*", s.strip())
+        if len(parts) != 2:
+            raise ValueError("Coordinates must be 'lon,lat'")
+        return float(parts[0]), float(parts[1])
+
+    try:
+        src_coord = _parse_coord(src)
+        dst_coord = _parse_coord(dst)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # determine network path(s). network can be None, a list of repeated params, or a single list containing a comma-separated string.
+    network_param = network
+    if network_param:
+        # handle single comma-separated value passed as one element
+        if len(network_param) == 1 and "," in network_param[0]:
+            network_list = [p.strip() for p in network_param[0].split(",") if p.strip()]
+        else:
+            network_list = list(network_param)
+    else:
+        network_list = None
+
+    planner_service = RoutePlanner(default_network=DEFAULT_NETWORK)
+    try:
+        result = planner_service.route_by_coords(src_coord, dst_coord, network=network_list, planner=planner)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        tb = traceback.format_exc()
+        raise HTTPException(status_code=500, detail={"error": str(e), "traceback": tb})
+
+    return JSONResponse(content={"success": True, "route": result})
 
 
 @app.get("/plugins")
