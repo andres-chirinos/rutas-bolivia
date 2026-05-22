@@ -422,7 +422,7 @@ def fetch_museums_bolivia_generalized(
 
         ?item wdt:P31 ?type .
         FILTER(?type IN (
-            wd:Q33506, wd:Q570116, wd:Q4989906, wd:Q174782, wd:Q839954,
+            wd:Q22698, wd:Q33506, wd:Q570116, wd:Q4989906, wd:Q174782, wd:Q839954,
             wd:Q8514, wd:Q16970, wd:Q16560, wd:Q124757, wd:Q166118,
             wd:Q46169, wd:Q8502
         )).
@@ -464,7 +464,7 @@ COMMON_QUERIES = {
         wd:Q597526         # Iglesia
         wd:Q166118        # Sitio Patrimonio de la Humanidad
         wd:Q46169         # Parque nacional
-        wd:Q46169 # Parque
+        wd:Q22698 # Parque
         #wd:Q8502          # Montaña
       }
       ?item wdt:P31/wdt:P279* ?type .

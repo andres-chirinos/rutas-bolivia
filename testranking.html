@@ -1,0 +1,378 @@
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { Play, Pause, FastForward, Upload, RotateCcw, BarChart2, Award, Clock } from 'lucide-react';
+
+// ==========================================
+// DATOS PRECARGADOS (Del CSV proporcionado)
+// Formato: [Minuto, Equipo, Problema]
+// ==========================================
+const DEMO_DATA = [
+  [11.45, "lospnssem2", "Problema C - Factorial Canino"],
+  [16.7, "losgolpeadorespagadossem2", "Problema C - Factorial Canino"],
+  [20.63, "printvictoriasem2", "Problema C - Factorial Canino"],
+  [27.72, "equiporocketsem1", "Problema C - Factorial Canino"],
+  [37.4, "losgolpeadorespagadossem2", "Problema H - Misión Intergaláctica"],
+  [38.28, "migajerossem2", "Problema C - Factorial Canino"],
+  [43.67, "babassem2", "Problema C - Factorial Canino"],
+  [44.32, "thebugbusterssem6", "Problema C - Factorial Canino"],
+  [47.27, "losgolpeadorespagadossem2", "Problema E - Conteo Electoral"],
+  [47.93, "aaaaaa9", "Problema C - Factorial Canino"],
+  [53.4, "lospnssem2", "Problema G - Certificados Halcones"],
+  [55.47, "lgicleyendssem2", "Problema C - Factorial Canino"],
+  [55.93, "programersjvsem2", "Problema A - Misión Perruna"],
+  [61.44, "lospnssem2", "Problema H - Misión Intergaláctica"],
+  [61.46, "equiporocketsem1", "Problema E - Conteo Electoral"],
+  [63.94, "programersjvsem2", "Problema B - Año Bisiesto"],
+  [64.42, "aaaaaa9", "Problema E - Conteo Electoral"],
+  [69.75, "golemdehielosem4", "Problema C - Factorial Canino"],
+  [80.32, "guayabasem2", "Problema C - Factorial Canino"],
+  [80.71, "proavanzadasem5", "Problema C - Factorial Canino"],
+  [82.82, "jrjavamasterssem2", "Problema C - Factorial Canino"],
+  [85.35, "ramraiderssem2", "Problema C - Factorial Canino"],
+  [87.22, "1ksem2", "Problema E - Conteo Electoral"],
+  [90.49, "lospnssem2", "Problema E - Conteo Electoral"],
+  [94.59, "migajerossem2", "Problema B - Año Bisiesto"],
+  [96.97, "alfamegamaravillasem4", "Problema A - Misión Perruna"],
+  [99.29, "alfamegamaravillasem4", "Problema B - Año Bisiesto"],
+  [106.55, "losrealessem2", "Problema C - Factorial Canino"],
+  [108.77, "1ksem2", "Problema C - Factorial Canino"],
+  [108.82, "alfamegamaravillasem4", "Problema C - Factorial Canino"],
+  [110.86, "programersjvsem2", "Problema C - Factorial Canino"],
+  [110.97, "aaaaaa9", "Problema H - Misión Intergaláctica"],
+  [114.09, "programersjvsem2", "Problema E - Conteo Electoral"],
+  [117.48, "migajerossem2", "Problema D - Operación Contraseña"],
+  [124.0, "migajerossem2", "Problema H - Misión Intergaláctica"],
+  [130.33, "babassem2", "Problema E - Conteo Electoral"],
+  [133.12, "alfamegamaravillasem4", "Problema E - Conteo Electoral"],
+  [133.61, "aaaaaa9", "Problema A - Misión Perruna"],
+  [138.05, "wisinyyandelsem2", "Problema C - Factorial Canino"],
+  [140.97, "equiporocketsem1", "Problema G - Certificados Halcones"],
+  [154.36, "thebugbusterssem6", "Problema E - Conteo Electoral"],
+  [157.59, "ramraiderssem2", "Problema E - Conteo Electoral"],
+  [159.97, "jrjavamasterssem2", "Problema H - Misión Intergaláctica"],
+  [170.19, "printvictoriasem2", "Problema E - Conteo Electoral"],
+  [192.08, "alfamegamaravillasem4", "Problema G - Certificados Halcones"],
+  [195.72, "error404sem2", "Problema C - Factorial Canino"],
+  [196.14, "alfamegamaravillasem4", "Problema D - Operación Contraseña"],
+  [204.06, "alfamegamaravillasem4", "Problema H - Misión Intergaláctica"],
+  [240.55, "golemdehielosem4", "Problema G - Certificados Halcones"],
+  [241.28, "golemdehielosem4", "Problema A - Misión Perruna"],
+  [242.35, "golemdehielosem4", "Problema H - Misión Intergaláctica"],
+  [245.59, "golemdehielosem4", "Problema D - Operación Contraseña"],
+  [245.8, "crshyeddysem1", "Problema C - Factorial Canino"],
+  [248.82, "losvatoslocossem2", "Problema A - Misión Perruna"],
+  [250.4, "golemdehielosem4", "Problema E - Conteo Electoral"],
+  [253.01, "jrjavamasterssem2", "Problema E - Conteo Electoral"]
+];
+
+// Paleta de colores para diferenciar equipos visualmente
+const TEAM_COLORS = [
+  'bg-blue-500', 'bg-green-500', 'bg-purple-500', 'bg-yellow-500', 'bg-red-500',
+  'bg-pink-500', 'bg-indigo-500', 'bg-teal-500', 'bg-orange-500', 'bg-cyan-500'
+];
+
+const getTeamColor = (index) => TEAM_COLORS[index % TEAM_COLORS.length];
+
+export default function App() {
+  // Estado principal
+  const [rawEvents, setRawEvents] = useState(DEMO_DATA);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1);
+  const [maxTime, setMaxTime] = useState(0);
+  
+  const requestRef = useRef();
+  const previousTimeRef = useRef();
+
+  // Procesar datos iniciales
+  useEffect(() => {
+    if (rawEvents.length > 0) {
+      const lastEventTime = Math.ceil(Math.max(...rawEvents.map(e => e[0])));
+      setMaxTime(lastEventTime + 5); // Un poco de buffer al final
+    }
+  }, [rawEvents]);
+
+  // Loop de animación
+  const animate = time => {
+    if (previousTimeRef.current !== undefined) {
+      const deltaTime = time - previousTimeRef.current;
+      setCurrentTime(prevTime => {
+        // 1 segundo real = 1 minuto de concurso * playbackSpeed
+        // Ajustamos para que sea fluido: deltaTime es ms
+        const timeIncrement = (deltaTime / 1000) * playbackSpeed * 2; 
+        const newTime = prevTime + timeIncrement;
+        
+        if (newTime >= maxTime) {
+          setIsPlaying(false);
+          return maxTime;
+        }
+        return newTime;
+      });
+    }
+    previousTimeRef.current = time;
+    if (isPlaying) {
+      requestRef.current = requestAnimationFrame(animate);
+    }
+  };
+
+  useEffect(() => {
+    if (isPlaying) {
+      requestRef.current = requestAnimationFrame(animate);
+    } else {
+      cancelAnimationFrame(requestRef.current);
+      previousTimeRef.current = undefined;
+    }
+    return () => cancelAnimationFrame(requestRef.current);
+  }, [isPlaying, maxTime, playbackSpeed]);
+
+  // Lógica de Ranking (Memoized para rendimiento)
+  const currentRanking = useMemo(() => {
+    const scores = {};
+    
+    // Inicializar equipos conocidos con 0
+    rawEvents.forEach(([, team]) => {
+      if (!scores[team]) scores[team] = { team, solved: 0, lastSolveTime: 0, problems: [] };
+    });
+
+    // Calcular puntajes hasta currentTime
+    rawEvents.forEach(([time, team, problem]) => {
+      if (time <= currentTime) {
+        if (!scores[team].problems.includes(problem)) {
+          scores[team].solved += 1;
+          scores[team].lastSolveTime = time;
+          scores[team].problems.push(problem);
+        }
+      }
+    });
+
+    // Convertir a array y ordenar
+    // Criterio ICPC: Más resueltos > Menor tiempo de penalización (aquí simplificado a último solve time para la animación)
+    return Object.values(scores)
+      .sort((a, b) => {
+        if (b.solved !== a.solved) return b.solved - a.solved;
+        return a.lastSolveTime - b.lastSolveTime; // Desempate simple por quien lo hizo antes
+      })
+      .slice(0, 15); // Top 15 para visualización
+  }, [currentTime, rawEvents]);
+
+  // Manejador de carga de CSV
+  const handleFileUpload = (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const text = e.target.result;
+      const lines = text.split('\n').slice(1); // Ignorar header
+      const newEvents = [];
+      
+      lines.forEach(line => {
+        // Parseo CSV simple (asumiendo que no hay comas dentro de los campos o están entre comillas)
+        const cols = line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
+        if (cols.length < 7) return;
+        
+        // Columnas basadas en el archivo del usuario:
+        // Envio(0), Problem Name(2), Minutos(5), Verdict(6)
+        const team = cols[0]?.replace(/"/g, '').trim();
+        const problem = cols[2]?.replace(/"/g, '').trim();
+        const minutes = parseFloat(cols[5]);
+        const verdict = cols[6]?.replace(/"/g, '').trim().toUpperCase();
+
+        if (['AC', 'OK', 'ACCEPTED', 'YES'].includes(verdict) && !isNaN(minutes)) {
+          newEvents.push([minutes, team, problem]);
+        }
+      });
+
+      // Ordenar por tiempo y deduplicar (primer AC cuenta)
+      newEvents.sort((a, b) => a[0] - b[0]);
+      const uniqueEvents = [];
+      const seen = new Set();
+      
+      newEvents.forEach(ev => {
+        const key = `${ev[1]}-${ev[2]}`; // Team-Problem
+        if (!seen.has(key)) {
+          seen.add(key);
+          uniqueEvents.push(ev);
+        }
+      });
+
+      setRawEvents(uniqueEvents);
+      setCurrentTime(0);
+      setIsPlaying(false);
+    };
+    reader.readAsText(file);
+  };
+
+  const maxSolved = Math.max(...currentRanking.map(r => r.solved), 1);
+
+  return (
+    <div className="min-h-screen bg-slate-900 text-slate-100 font-sans p-4 md:p-8 flex flex-col">
+      
+      {/* Header */}
+      <header className="mb-8 flex flex-col md:flex-row justify-between items-start md:items-center border-b border-slate-700 pb-4 gap-4">
+        <div>
+          <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-400 to-teal-400 bg-clip-text text-transparent">
+            Ranking Evolution
+          </h1>
+          <p className="text-slate-400 text-sm mt-1">Visualizador de Dinámica de Competencia</p>
+        </div>
+
+        {/* Stats Display */}
+        <div className="flex items-center gap-6 bg-slate-800 p-3 rounded-lg shadow-lg">
+          <div className="flex items-center gap-2">
+            <Clock className="text-blue-400 w-5 h-5" />
+            <div>
+              <p className="text-xs text-slate-400 uppercase tracking-wider">Tiempo</p>
+              <p className="font-mono text-xl font-bold">{Math.floor(currentTime)} min</p>
+            </div>
+          </div>
+          <div className="h-8 w-px bg-slate-600"></div>
+          <div className="flex items-center gap-2">
+            <Award className="text-yellow-400 w-5 h-5" />
+            <div>
+              <p className="text-xs text-slate-400 uppercase tracking-wider">Líder</p>
+              <p className="font-bold text-sm truncate max-w-[150px]">
+                {currentRanking[0]?.team || "-"}
+              </p>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Visualization Area */}
+      <main className="flex-grow flex flex-col relative">
+        <div className="flex-grow relative bg-slate-800/50 rounded-xl border border-slate-700 p-6 overflow-hidden shadow-inner min-h-[500px]">
+          
+          {/* Grid Lines Logic */}
+          <div className="absolute inset-0 flex justify-between px-6 pointer-events-none opacity-20 z-0">
+             {[...Array(maxSolved + 1)].map((_, i) => (
+               <div key={i} className="border-r border-slate-400 h-full flex flex-col justify-end pb-2">
+                 <span className="text-xs text-slate-400 translate-x-1/2">{i}</span>
+               </div>
+             ))}
+          </div>
+
+          {/* Bars */}
+          <div className="relative z-10 mt-8 space-y-2 h-full">
+            {currentRanking.map((data, index) => {
+              // Calcular porcentaje del ancho
+              const widthPercent = (data.solved / maxSolved) * 95; // max 95% para dejar espacio al texto
+              
+              // Posición absoluta para animación de reordenamiento
+              // En un entorno prod usaríamos 'react-flip-move', aquí lo simulamos con absolute y top
+              const topPos = index * 48; // 48px altura de fila
+
+              return (
+                <div 
+                  key={data.team}
+                  className="absolute left-0 w-full transition-all duration-500 ease-in-out"
+                  style={{ 
+                    top: `${topPos}px`,
+                  }}
+                >
+                  <div className="flex items-center gap-3">
+                    {/* Rank Label */}
+                    <div className="w-8 text-right text-sm font-mono text-slate-500">
+                      {index + 1}.
+                    </div>
+                    
+                    {/* Bar Container */}
+                    <div className="flex-grow relative h-10 bg-slate-700/30 rounded-r-md overflow-visible flex items-center">
+                      {/* The Bar */}
+                      <div 
+                        className={`h-8 rounded-r-md shadow-lg flex items-center justify-end pr-2 transition-all duration-300 ${getTeamColor(index)}`}
+                        style={{ width: `${Math.max(widthPercent, 0.5)}%` }}
+                      >
+                         {data.solved > 0 && (
+                           <span className="text-white font-bold text-sm drop-shadow-md">
+                             {data.solved}
+                           </span>
+                         )}
+                      </div>
+                      
+                      {/* Team Name (Right of bar) */}
+                      <span className="ml-2 text-sm font-medium text-slate-200 truncate max-w-[200px]">
+                        {data.team}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </main>
+
+      {/* Controls Footer */}
+      <footer className="mt-6 bg-slate-800 rounded-xl p-4 border border-slate-700 flex flex-col md:flex-row gap-4 items-center justify-between shadow-xl z-20">
+        
+        {/* Playback Controls */}
+        <div className="flex items-center gap-3 w-full md:w-auto">
+          <button 
+            onClick={() => setIsPlaying(!isPlaying)}
+            className="p-3 rounded-full bg-blue-600 hover:bg-blue-500 text-white transition-colors shadow-lg focus:ring-2 focus:ring-blue-400 focus:outline-none"
+          >
+            {isPlaying ? <Pause className="w-5 h-5" fill="currentColor" /> : <Play className="w-5 h-5 ml-1" fill="currentColor" />}
+          </button>
+          
+          <button 
+            onClick={() => {
+              setIsPlaying(false);
+              setCurrentTime(0);
+            }}
+            className="p-2 rounded-full text-slate-400 hover:bg-slate-700 hover:text-white transition-colors"
+          >
+            <RotateCcw className="w-4 h-4" />
+          </button>
+
+          <div className="flex items-center gap-2 bg-slate-900 rounded-lg px-2 py-1 ml-2">
+             <span className="text-xs text-slate-500 font-mono">SPEED</span>
+             {[1, 5, 20, 50].map(speed => (
+               <button
+                 key={speed}
+                 onClick={() => setPlaybackSpeed(speed)}
+                 className={`px-2 py-1 text-xs font-bold rounded ${playbackSpeed === speed ? 'bg-blue-900 text-blue-300' : 'text-slate-400 hover:text-slate-200'}`}
+               >
+                 {speed}x
+               </button>
+             ))}
+          </div>
+        </div>
+
+        {/* Slider */}
+        <div className="flex-grow w-full md:px-6">
+          <input
+            type="range"
+            min="0"
+            max={maxTime}
+            step="0.1"
+            value={currentTime}
+            onChange={(e) => {
+              setIsPlaying(false);
+              setCurrentTime(parseFloat(e.target.value));
+            }}
+            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+          />
+          <div className="flex justify-between text-xs text-slate-500 mt-1 font-mono">
+            <span>0 min</span>
+            <span>{Math.floor(maxTime)} min</span>
+          </div>
+        </div>
+
+        {/* Data Upload (Reusability Feature) */}
+        <div className="relative group">
+            <input
+              type="file"
+              accept=".csv"
+              onChange={handleFileUpload}
+              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+            />
+            <button className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg transition-colors text-sm font-medium group-hover:ring-2 ring-slate-500">
+              <Upload className="w-4 h-4" />
+              <span>Cargar Nuevo CSV</span>
+            </button>
+        </div>
+
+      </footer>
+    </div>
+  );
+}
