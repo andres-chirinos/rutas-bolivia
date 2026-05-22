@@ -187,7 +187,7 @@ Un aplicación algo **CANCERIGENA** de google maps
     const map = L.map('map').setView([-16.5, -68.1], 13);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
 
-    const apiUrl = 'http://127.0.0.1:8000';
+    const apiUrl = 'http://127.0.0.1:8001';
 
     const info = document.getElementById('info');
     const refreshBtn = document.getElementById('refreshBtn');
@@ -1773,7 +1773,7 @@ Un aplicación algo **CANCERIGENA** de google maps
                 if (statusInfo) statusInfo.textContent = `${dataset.name} cargada desde caché`;
             } else {
                 // URL por defecto si no se proporciona
-                const dataUrl = url || `http://localhost:8000/files/${datasetName}`;
+                const dataUrl = url || `http://localhost:8001/files/${datasetName}`;
                 
                 try {
                     console.log(`Cargando dataset: ${dataset.name}`);
@@ -2410,7 +2410,7 @@ Un aplicación algo **CANCERIGENA** de google maps
             } else {
                 // Fallback al endpoint anterior si el nuevo no funciona
                 console.warn('Endpoint /museums no disponible, usando fallback');
-                const fallbackResp = await fetch(`${apiUrl}/demo/museums?src=Q847038&dst=Q6171768&network=dummy_datasets/rutas_recorridos_2025.geojson`);
+                const fallbackResp = await fetch(`${apiUrl}/demo/museums?src=Q138511481&dst=Q138511511&network=dummy_datasets/rutas_recorridos_2025.geojson`);
                 if (fallbackResp.ok) {
                     const fallbackData = await fallbackResp.json();
                     if (fallbackData.nodes && fallbackData.nodes.features) {

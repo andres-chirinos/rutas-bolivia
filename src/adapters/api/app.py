@@ -171,6 +171,8 @@ async def demo_museums(src: str = Query(...), dst: str = Query(...), network: Op
             route_result = compute.shortest_path(nodes_file, network_path, src, dst)
         else:
             raise AttributeError("Plugin has no function 'shortest_path'")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail={"error": str(e)})
     except Exception as e:
         tb = traceback.format_exc()
         raise HTTPException(status_code=500, detail={"error": f"Failed during compute: {e}", "traceback": tb})

@@ -70,7 +70,10 @@ class WikidataQueryExecutor:
                 query = query[:-1] + f" LIMIT {limit}"
 
         # Ejecutar query
-        headers = {"Accept": "application/sparql-results+json"}
+        headers = {
+            "Accept": "application/sparql-results+json",
+            "User-Agent": "DatameshClient/1.0 (https://github.com/example/datamesh-client; admin@example.com)"
+        }
         response = requests.get(
             SPARQL_ENDPOINT, params={"query": query}, headers=headers, timeout=timeout
         )
