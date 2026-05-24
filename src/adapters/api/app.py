@@ -244,8 +244,62 @@ async def route_by_coords(
 
     return JSONResponse(content={"success": True, "route": result})
 
+@app.post("/expert/recommendations")
+async def get_tourist_expert_recommendations(preferences: dict):
+    """
+    Sistema experto: Devuelve recomendaciones de lugares turísticos basadas en 
+    las preferencias del usuario.
+    
+    body = {
+        "likes_history": bool,
+        "likes_nature": bool,
+        "likes_art": bool,
+        "likes_outdoors": bool,
+        "with_family": bool,
+        "limited_time": bool
+    }
+    """
+    try:
+        from plugins.expert_system.tourist_expert import get_tourist_recommendations
+        from plugins.wikidata_plugin.wikidata_general import fetch_common_query
+        import uuid
+        
+        # Primero, buscamos si ya tenemos el asset con los museos en tmp/ o llamamos a Wikidata
+        # En una app de producción usaríamos el catálogo, para simplicidad usaremos un archivo
+        # temporal o lo traeremos de la query común "museums_bolivia"
+        
+        tmpdir = os.path.join(os.getcwd(), "tmp")
+        os.makedirs(tmpdir, exist_ok=True)
+        nodes_path = os.path.join(tmpdir, f"expert_nodes_{uuid.uuid4().hex}.geojson")
+        
+        # Obtener los datos turísticos desde Wikidata (usando cache o fetch automático de la plugin_general)
+        result_asset = fetch_common_query("museums_bolivia", limit=500)
+        
+        # Wikidata general devuelve un "data_path" con los datos geojson/json
+        data_path = result_asset.get("data_path")
+        
+        if not data_path or not os.path.exists(data_path):
+            raise Exception("No se pudo obtener el dataset base para procesar las reglas del sistema experto.")
+            
+        # Correr sistema experto
+        result = get_tourist_recommendations(preferences, nodes_path=data_path)
+        
+        if not result.get("success"):
+            raise HTTPException(status_code=500, detail=result.get("error"))
+            
+        return JSONResponse(content=result)
+        
+    except Exception as e:
+        tb = traceback.format_exc()
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": f"Failed executing expert system: {e}",
+                "traceback": tb
+            }
+        )
 
-@app.get("/plugins")
+
 async def list_plugins():
     """List all available plugins and their capabilities."""
     try:
