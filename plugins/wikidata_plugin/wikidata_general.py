@@ -7,6 +7,12 @@ Este plugin permite:
 3. Exponer los datos a través del sistema de assets del datamesh
 """
 
+from src.adapters.crypto.signature_adapter import SignatureAdapter
+from src.core.services.prov_generator import (
+    generate_prov_for_asset,
+    generate_asset_descriptor_jsonld,
+)
+from src.adapters.persistence.local_persistence import LocalPersistence
 import requests
 import json
 import re
@@ -22,12 +28,6 @@ project_root = os.path.join(os.path.dirname(__file__), "..", "..")
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from src.adapters.persistence.local_persistence import LocalPersistence
-from src.core.services.prov_generator import (
-    generate_prov_for_asset,
-    generate_asset_descriptor_jsonld,
-)
-from src.adapters.crypto.signature_adapter import SignatureAdapter
 
 SPARQL_ENDPOINT = "https://query.wikidata.org/sparql"
 
@@ -94,7 +94,8 @@ class WikidataQueryExecutor:
             title=title,
             description=description,
             query=query,
-            raw_results_count=len(raw_data.get("results", {}).get("bindings", [])),
+            raw_results_count=len(raw_data.get(
+                "results", {}).get("bindings", [])),
         )
 
         return asset_info
@@ -130,7 +131,8 @@ class WikidataQueryExecutor:
 
                 # Buscar coordenadas
                 if var == "coord" or "coord" in var.lower():
-                    coord_match = re.match(r"Point\(([-0-9\.]+) ([-0-9\.]+)\)", value)
+                    coord_match = re.match(
+                        r"Point\(([-0-9\.]+) ([-0-9\.]+)\)", value)
                     if coord_match:
                         lon, lat = float(coord_match.group(1)), float(
                             coord_match.group(2)
@@ -282,7 +284,8 @@ class WikidataQueryExecutor:
 
         # Convertir sets a listas para serialización JSON
         for var in var_analysis:
-            var_analysis[var]["data_types"] = list(var_analysis[var]["data_types"])
+            var_analysis[var]["data_types"] = list(
+                var_analysis[var]["data_types"])
 
         return {
             "source": "wikidata",
@@ -456,7 +459,7 @@ def fetch_museums_bolivia_generalized(
 COMMON_QUERIES = {
     "museums_bolivia": {
         "query": """
-    SELECT ?item ?itemLabel ?coord ?typeLabel WHERE {
+    SELECT ?item ?itemLabel ?coord ?typeLabel ?image WHERE {
       VALUES ?type {
         wd:Q33506        # Museo
         wd:Q4989906      # Estatua
@@ -473,6 +476,7 @@ COMMON_QUERIES = {
       ?item wdt:P31/wdt:P279* ?type .
       ?item wdt:P17 wd:Q750 .  # Bolivia
       ?item wdt:P625 ?coord .
+      OPTIONAL { ?item wdt:P18 ?image . }
       SERVICE wikibase:label { bd:serviceParam wikibase:language "es,en". }
       OPTIONAL { ?item wdt:P31 ?type . }
     }

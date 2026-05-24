@@ -85,22 +85,18 @@ async def plugin_run(payload: dict):
 async def get_museums_only():
     """Get museums data only, without any route calculation."""
     try:
-        fetcher = importlib.import_module("plugins.wikidata_plugin.wikidata_fetcher")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to import museums plugin: {e}")
-
-    # prepare tmp dir and filename
-    tmpdir = os.path.join(os.getcwd(), "tmp")
-    os.makedirs(tmpdir, exist_ok=True)
-    nodes_path = os.path.join(tmpdir, f"nodes_{uuid.uuid4().hex}.geojson")
-
-    try:
-        # Fetch museums without any route processing
-        fetcher.fetch_museums_bolivia(nodes_path, limit=100)
+        from plugins.wikidata_plugin.wikidata_general import fetch_common_query
         
-        with open(nodes_path, 'r', encoding='utf-8') as f:
+        # Obtener los datos turísticos desde Wikidata (usando cache o fetch automático de la plugin_general)
+        result_asset = fetch_common_query("museums_bolivia", limit=500)
+        data_path = result_asset.get("data_path")
+        
+        if not data_path or not os.path.exists(data_path):
+            raise Exception("No se pudo obtener el archivo geojson de Wikidata.")
+            
+        with open(data_path, 'r', encoding='utf-8') as f:
             nodes_geojson = json.load(f)
-        
+            
         return JSONResponse(content={
             "nodes": nodes_geojson,
             "success": True
@@ -115,10 +111,6 @@ async def get_museums_only():
                 "traceback": tb
             }
         )
-    finally:
-        # Cleanup
-        if os.path.exists(nodes_path):
-            os.remove(nodes_path)
 
 
 @app.get("/demo/museums")
@@ -282,7 +274,7 @@ async def get_tourist_expert_recommendations(preferences: dict):
             raise Exception("No se pudo obtener el dataset base para procesar las reglas del sistema experto.")
             
         # Correr sistema experto
-        result = get_tourist_recommendations(preferences, nodes_path=data_path)
+        result = get_tourist_recommendations(preferences, nodes_geojson_path=data_path)
         
         if not result.get("success"):
             raise HTTPException(status_code=500, detail=result.get("error"))

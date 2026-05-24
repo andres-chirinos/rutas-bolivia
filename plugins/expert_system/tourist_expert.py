@@ -76,7 +76,43 @@ class TouristExpertSystem:
             
             # Verificar si el lugar encaja en alguna categoría recomendada
             if place_type in recommended_types:
+                # Filtrado geográfico si el usuario mandó su ubicación
+                if "user_lat" in user_preferences and "user_lon" in user_preferences:
+                    import math
+                    def haversine(lat1, lon1, lat2, lon2):
+                        R = 6371  # km
+                        dlat = math.radians(lat2 - lat1)
+                        dlon = math.radians(lon2 - lon1)
+                        a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
+                        return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1-a))
+                    
+                    try:
+                        p_lon, p_lat = place["geometry"]["coordinates"]
+                        u_lat = float(user_preferences["user_lat"])
+                        u_lon = float(user_preferences["user_lon"])
+                        max_km = float(user_preferences.get("max_radius_km", 30.0))
+                        
+                        dist = haversine(u_lat, u_lon, p_lat, p_lon)
+                        if dist > max_km:
+                            continue # Saltar este lugar si está fuera del rango
+                            
+                        # Si está en el rango, añadir un bonus por cercanía
+                        # (Lugares más cercanos tienen más puntuación)
+                        proximity_bonus = max(0, (max_km - dist) / max_km) # 0 a 1
+                    except (KeyError, ValueError, TypeError):
+                        proximity_bonus = 0
+                else:
+                    proximity_bonus = 0
+
+                # Puntaje base por categoría
                 score = recommended_types[place_type]
+                
+                # Fuerte bonus si tiene imagen (los lugares visuales son más atractivos)
+                if "image" in props or "pic" in props or "thumbnail" in props:
+                    score += 5.0
+                    
+                # Fuerte bonus por cercanía
+                score += proximity_bonus * 10.0
                 
                 # Bonus por popularidad si estuviera disponible en las propiedades
                 if "population" in props or "visitors" in props:
