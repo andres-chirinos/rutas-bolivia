@@ -14,8 +14,165 @@ Functions:
 import json
 from typing import List, Dict, Any, Tuple
 import math
+import os
+import hashlib
+import time
 import networkx as nx
 from shapely.geometry import LineString, Point
+
+
+# ─── Spatial Tile Index ────────────────────────────────────────────────────────
+# Pre-splits large GeoJSON files into ~1km spatial tiles on disk.
+# Route requests only load the tiles near src/dst, keeping RAM low.
+
+TILE_SIZE = 0.01          # ~1.1 km grid cells
+LARGE_FILE_THRESHOLD = 500  # files with more features than this get tiled
+
+
+class _SpatialTileIndex:
+    """Pre-processes large GeoJSON files into spatial tiles for fast bbox queries."""
+
+    def __init__(self):
+        self._tile_dir = os.path.join(os.path.dirname(__file__), ".graph_tiles")
+        os.makedirs(self._tile_dir, exist_ok=True)
+
+    # ── helpers ──────────────────────────────────────────────────────────────
+    def _dir_for(self, geojson_path: str) -> str:
+        name = hashlib.md5(os.path.abspath(geojson_path).encode()).hexdigest()[:12]
+        d = os.path.join(self._tile_dir, name)
+        os.makedirs(d, exist_ok=True)
+        return d
+
+    def _manifest_path(self, geojson_path: str) -> str:
+        return os.path.join(self._dir_for(geojson_path), "manifest.json")
+
+    def _is_preprocessed(self, geojson_path: str) -> bool:
+        mp = self._manifest_path(geojson_path)
+        if not os.path.exists(mp):
+            return False
+        return os.path.getmtime(mp) >= os.path.getmtime(geojson_path)
+
+    # ── preprocess ───────────────────────────────────────────────────────────
+    def preprocess(self, geojson_path: str):
+        """Split a large GeoJSON into spatial tile files (one-time operation)."""
+        from collections import defaultdict
+
+        tile_dir = self._dir_for(geojson_path)
+        mp = self._manifest_path(geojson_path)
+
+        if self._is_preprocessed(geojson_path):
+            with open(mp) as f:
+                manifest = json.load(f)
+            print(f"  ✅ Tiles ya preprocesados para {os.path.basename(geojson_path)} ({len(manifest)} tiles)")
+            return manifest
+
+        print(f"  🔪 Dividiendo {os.path.basename(geojson_path)} en tiles espaciales...")
+        t0 = time.time()
+
+        with open(geojson_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        tiles = defaultdict(list)  # (gx, gy) -> [features]
+
+        for feat in data.get("features", []):
+            geom = feat.get("geometry")
+            if not geom:
+                continue
+            gtype = geom.get("type")
+            coords = geom.get("coordinates", [])
+            if gtype == "MultiLineString":
+                flat = [c for line in coords for c in line]
+            elif gtype == "LineString":
+                flat = coords
+            else:
+                continue
+
+            # Find all tiles this feature touches
+            seen = set()
+            for c in flat:
+                gx = int(c[0] / TILE_SIZE)
+                gy = int(c[1] / TILE_SIZE)
+                seen.add((gx, gy))
+            for key in seen:
+                tiles[key].append(feat)
+
+        # Purge old tiles
+        for old in os.listdir(tile_dir):
+            os.remove(os.path.join(tile_dir, old))
+
+        # Write each tile as a small JSON
+        manifest = {}
+        for (gx, gy), feats in tiles.items():
+            tile_file = os.path.join(tile_dir, f"{gx}_{gy}.json")
+            with open(tile_file, "w", encoding="utf-8") as f:
+                json.dump(feats, f)
+            manifest[f"{gx},{gy}"] = len(feats)
+
+        with open(mp, "w") as f:
+            json.dump(manifest, f)
+
+        del data  # free memory immediately
+        elapsed = time.time() - t0
+        print(f"    → {len(manifest)} tiles creados en {elapsed:.1f}s")
+        return manifest
+
+    # ── bbox query ───────────────────────────────────────────────────────────
+    def load_features_in_bbox(self, geojson_path: str, bbox: Tuple[float, float, float, float]) -> List[Dict]:
+        """Load only features from tiles that intersect the bounding box."""
+        tile_dir = self._dir_for(geojson_path)
+
+        if not self._is_preprocessed(geojson_path):
+            self.preprocess(geojson_path)
+
+        min_lon, min_lat, max_lon, max_lat = bbox
+        min_gx = int(min_lon / TILE_SIZE)
+        max_gx = int(max_lon / TILE_SIZE)
+        min_gy = int(min_lat / TILE_SIZE)
+        max_gy = int(max_lat / TILE_SIZE)
+
+        features = []
+        tiles_loaded = 0
+        for gx in range(min_gx, max_gx + 1):
+            for gy in range(min_gy, max_gy + 1):
+                tile_file = os.path.join(tile_dir, f"{gx}_{gy}.json")
+                if os.path.exists(tile_file):
+                    with open(tile_file, "r", encoding="utf-8") as f:
+                        features.extend(json.load(f))
+                    tiles_loaded += 1
+
+        print(f"    📍 {os.path.basename(geojson_path)}: cargados {tiles_loaded} tiles, {len(features)} features (de bbox)")
+        return features
+
+
+class _SubgraphCache:
+    """Lightweight in-memory cache for recently computed subgraphs, keyed by bbox hash."""
+
+    def __init__(self, max_entries: int = 8):
+        self._cache: Dict[str, Dict[str, Any]] = {}
+        self._max = max_entries
+
+    def _key(self, network_paths: str, bbox: Tuple) -> str:
+        raw = f"{network_paths}|{bbox}"
+        return hashlib.md5(raw.encode()).hexdigest()
+
+    def get(self, network_paths: str, bbox: Tuple) -> Dict[str, Any] | None:
+        k = self._key(network_paths, bbox)
+        if k in self._cache:
+            print("⚡ Usando subgrafo en caché (misma zona)")
+            return self._cache[k]
+        return None
+
+    def put(self, network_paths: str, bbox: Tuple, results: Dict[str, Any]):
+        k = self._key(network_paths, bbox)
+        # Evict oldest if at capacity
+        if len(self._cache) >= self._max and k not in self._cache:
+            oldest = next(iter(self._cache))
+            del self._cache[oldest]
+        self._cache[k] = results
+
+
+_tile_index = _SpatialTileIndex()
+_subgraph_cache = _SubgraphCache()
 
 # Transport type weights (lower = better preference)
 TRANSPORT_WEIGHTS = {
@@ -78,7 +235,7 @@ def _get_layer_type(feature: Dict[str, Any]) -> str:
         return layer_type
     
     # Infer from properties
-    if props.get("type") == "street" or "street" in str(feature.get("id", "")).lower():
+    if props.get("type") == "street" or "street" in str(feature.get("id", "")).lower() or "tipovia" in props or "nombrevia" in props:
         return "street"
     elif props.get("stations") or props.get("stops"):
         return "station_line"
@@ -173,9 +330,16 @@ def test_multilayer_network(lines_geojson: str) -> Dict[str, Any]:
 
 
 def build_network_from_lines(
-    lines_geojson_path: str,
+    lines_geojson_path: str = None,
+    bbox: Tuple[float, float, float, float] = None,
+    features_list: List[Dict] = None
 ) -> Dict[str, Any]:
     """Build a multi-layer graph supporting streets, free lines, and station lines.
+    
+    Can be called with either:
+    - lines_geojson_path: comma-separated paths to GeoJSON files (legacy)
+    - features_list: pre-loaded list of GeoJSON features (from tile system)
+    
     Returns:
     - graph: NetworkX graph with multi-modal routing
     - node_index: maps node_id -> (lon, lat)
@@ -183,8 +347,14 @@ def build_network_from_lines(
     - line_info: maps line_id -> transport type and properties
     - stations: maps line_id -> list of station coordinates (for station_lines)
     """
-    with open(lines_geojson_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    if features_list is None:
+        features_list = []
+        for path in lines_geojson_path.split(","):
+            path = path.strip()
+            if not path: continue
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                features_list.extend(data.get("features", []))
 
     G = nx.Graph()
     node_index: Dict[str, Tuple[float, float]] = {}
@@ -193,7 +363,8 @@ def build_network_from_lines(
     stations: Dict[str, List[Tuple[float, float]]] = {}
 
     def coord_id(coord: Tuple[float, float]) -> str:
-        return f"{coord[0]:.5f},{coord[1]:.5f}"
+        # Optimization: Use 4 decimal places (approx 11m precision) to snap nearby nodes
+        return f"{coord[0]:.4f},{coord[1]:.4f}"
 
     def add_node(coord: Tuple[float, float]) -> str:
         """Add node to graph and index."""
@@ -218,7 +389,15 @@ def build_network_from_lines(
             G.add_edge(node1, node2, weight=weight, distance_km=distance)
 
     # Process each feature
-    for idx, feat in enumerate(data.get("features", [])):
+    features_total = len(features_list)
+    features_processed = 0
+    features_filtered = 0
+    print(f"Cargadas {features_total} características desde los archivos.")
+    
+    for idx, feat in enumerate(features_list):
+        if idx > 0 and idx % 10000 == 0:
+            print(f"  ...procesando {idx}/{features_total} (Filtro BoundingBox omitió {features_filtered})...")
+            
         geom = feat.get("geometry")
         if not geom:
             continue
@@ -230,6 +409,22 @@ def build_network_from_lines(
             lines = geom.get("coordinates", [])
         else:
             continue
+            
+        if bbox is not None:
+            min_lon, min_lat, max_lon, max_lat = bbox
+            in_bbox = False
+            for line in lines:
+                for coord in line:
+                    if min_lon <= coord[0] <= max_lon and min_lat <= coord[1] <= max_lat:
+                        in_bbox = True
+                        break
+                if in_bbox:
+                    break
+            if not in_bbox:
+                features_filtered += 1
+                continue
+
+        features_processed += 1
 
         line_id = str(feat.get("id", f"line_{idx}"))
         transport_type = _get_transport_type(feat)
@@ -333,50 +528,66 @@ def build_network_from_lines(
                             
                             add_edge(station1, station2, transport_weight + TRANSFER_PENALTY, distance, line_data)
 
-    # Add selective walking connections between nearby nodes for multi-modal routing
-    # Only connect nodes that are within walking distance and not already connected
-    print("Adding walking connections...")
-    node_list = list(node_index.items())
-    walking_connections_added = 0
-    
-    # Use spatial indexing for efficiency - only check nearby nodes
+    # ── Bridge connections: link transport nodes ↔ nearest street node ──────
+    # Instead of an O(N²) loop over all nodes, we only create ONE walking edge
+    # from each transport-only node to its single nearest street node.
     from collections import defaultdict
-    spatial_grid = defaultdict(list)
-    grid_size = 0.001  # Approximately 100m grid cells
     
-    # Build spatial index
-    for node_id, coord in node_list:
-        grid_x = int(coord[0] / grid_size)
-        grid_y = int(coord[1] / grid_size)
-        spatial_grid[(grid_x, grid_y)].append((node_id, coord))
+    print("Creando puentes transporte ↔ calles...")
     
-    # Only add walking connections between nodes in adjacent grid cells
-    for (grid_x, grid_y), nodes_in_cell in spatial_grid.items():
-        # Check current cell and 8 adjacent cells
-        for dx in [-1, 0, 1]:
-            for dy in [-1, 0, 1]:
-                adjacent_cell = (grid_x + dx, grid_y + dy)
-                if adjacent_cell in spatial_grid:
-                    for node1, coord1 in nodes_in_cell:
-                        for node2, coord2 in spatial_grid[adjacent_cell]:
-                            if node1 != node2 and not G.has_edge(node1, node2):
-                                distance = _calculate_distance_km(coord1, coord2)
-                                if distance <= MAX_WALKING_DISTANCE_KM:
-                                    walking_weight = distance * WALKING_COST_PER_KM
-                                    
-                                    line_data = {
-                                        "line_id": "walking",
-                                        "transport_type": "walking",
-                                        "layer_type": "street",
-                                        "weight": walking_weight,
-                                        "distance_km": distance,
-                                        "is_walking": True
-                                    }
-                                    
-                                    add_edge(node1, node2, walking_weight, distance, line_data)
-                                    walking_connections_added += 1
+    # 1. Classify nodes by layer
+    node_layers = defaultdict(set)
+    for (n1, n2), edges in edge_lines.items():
+        for edge in edges:
+            lt = edge.get("layer_type", "unknown")
+            node_layers[n1].add(lt)
+            node_layers[n2].add(lt)
     
-    print(f"Added {walking_connections_added} walking connections")
+    street_nodes = {nid for nid, layers in node_layers.items() if "street" in layers}
+    transport_only = {nid for nid in G.nodes() if nid not in street_nodes}
+    
+    print(f"  Nodos calle: {len(street_nodes)}, Nodos solo-transporte: {len(transport_only)}")
+    
+    # 2. Spatial index of street nodes only (lightweight)
+    street_grid = defaultdict(list)
+    grid_sz = 0.002  # ~220m cells
+    for nid in street_nodes:
+        if nid in node_index:
+            c = node_index[nid]
+            street_grid[(int(c[0]/grid_sz), int(c[1]/grid_sz))].append((nid, c))
+    
+    # 3. For each transport-only node, connect to nearest street node
+    bridges = 0
+    for nid in transport_only:
+        if nid not in node_index:
+            continue
+        coord = node_index[nid]
+        gx, gy = int(coord[0]/grid_sz), int(coord[1]/grid_sz)
+        
+        best_id, best_dist = None, float('inf')
+        for dx in range(-2, 3):
+            for dy in range(-2, 3):
+                for snid, sc in street_grid.get((gx+dx, gy+dy), []):
+                    d = abs(coord[0]-sc[0]) + abs(coord[1]-sc[1])  # Manhattan for speed
+                    if d < best_dist:
+                        best_dist = d
+                        best_id = snid
+        
+        if best_id is not None:
+            real_dist = _calculate_distance_km(coord, node_index[best_id])
+            if real_dist <= MAX_WALKING_DISTANCE_KM:
+                line_data = {
+                    "line_id": "walking_bridge",
+                    "transport_type": "walking",
+                    "layer_type": "street",
+                    "weight": real_dist * WALKING_COST_PER_KM,
+                    "distance_km": real_dist,
+                    "is_walking": True
+                }
+                add_edge(nid, best_id, real_dist * WALKING_COST_PER_KM, real_dist, line_data)
+                bridges += 1
+    
+    print(f"  ✅ {bridges} puentes creados")
 
     return {
         "graph": G, 
@@ -429,15 +640,22 @@ def _find_optimal_path(
         }
         return [src_nid, dst_nid], [walking_segment]
     
-    # Strategy 2: Try shortest path on existing graph
+    # Strategy 2: Try A* path on existing graph
+    def dist_heuristic(u, v):
+        try:
+            u_coord = node_index[u]
+            v_coord = node_index[v]
+            return _calculate_distance_km(u_coord, v_coord) * 1.0 # Minimum weight factor
+        except KeyError:
+            return 0
+
+    print(f"Buscando ruta con A* desde {src_nid} hasta {dst_nid}...")
     try:
-        if nx.has_path(G, src_nid, dst_nid):
-            path_nodes = list(nx.shortest_path(G, source=src_nid, target=dst_nid, weight="weight"))
-        else:
-            raise nx.NetworkXNoPath("No direct path found")
+        path_nodes = nx.astar_path(G, source=src_nid, target=dst_nid, heuristic=dist_heuristic, weight="weight")
+        print(f"Ruta A* encontrada con {len(path_nodes)} nodos.")
     except nx.NetworkXNoPath:
         # Strategy 3: Find nearest connected nodes and create multi-segment route
-        print(f"No direct path found. Attempting multi-segment routing...")
+        print(f"No direct path found. Attempting multi-segment routing with A*...")
         
         # Find all nodes within walking distance of source
         src_candidates = []
@@ -464,15 +682,14 @@ def _find_optimal_path(
         for src_node, src_walk_dist in src_candidates[:5]:  # Try top 5 closest
             for dst_node, dst_walk_dist in dst_candidates[:5]:
                 try:
-                    if nx.has_path(G, src_node, dst_node):
-                        middle_path = list(nx.shortest_path(G, source=src_node, target=dst_node, weight="weight"))
-                        
-                        # Calculate total cost
-                        total_cost = (src_walk_dist + dst_walk_dist) * WALKING_COST_PER_KM
-                        path_cost = nx.shortest_path_length(G, source=src_node, target=dst_node, weight="weight")
-                        total_cost += path_cost
-                        
-                        if total_cost < best_cost:
+                    middle_path = nx.astar_path(G, source=src_node, target=dst_node, heuristic=dist_heuristic, weight="weight")
+                    
+                    # Calculate total cost
+                    total_cost = (src_walk_dist + dst_walk_dist) * WALKING_COST_PER_KM
+                    path_cost = nx.path_weight(G, middle_path, weight="weight")
+                    total_cost += path_cost
+                    
+                    if total_cost < best_cost:
                             best_cost = total_cost
                             best_path = [src_nid] + middle_path + [dst_nid]
                             
@@ -619,21 +836,7 @@ def shortest_path(
     if transport_preferences:
         TRANSPORT_WEIGHTS.update(transport_preferences)
 
-    # Build multi-layer network
-    try:
-        results = build_network_from_lines(lines_geojson)
-        G = results["graph"]
-        node_idx = results["node_index"]
-        edge_lines = results["edge_lines"]
-        line_info = results["line_info"]
-        stations = results.get("stations", {})
-        
-        print(f"Built network: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
-        
-    except Exception as e:
-        raise ValueError(f"Failed to build network: {str(e)}")
-
-    # Load nodes and find src/dst coordinates
+    # 1. Load nodes and find src/dst coordinates
     try:
         with open(nodes_geojson, "r", encoding="utf-8") as f:
             nodes = json.load(f)
@@ -654,13 +857,70 @@ def shortest_path(
     if dst_coord is None:
         raise ValueError(f"Destination node '{dst_id}' not found in nodes geojson")
 
-    # Map to nearest network nodes
+    # 2. Compute bounding box from src/dst (margin ~ 3.3km)
+    margin = 0.03
+    min_lon = min(src_coord[0], dst_coord[0]) - margin
+    max_lon = max(src_coord[0], dst_coord[0]) + margin
+    min_lat = min(src_coord[1], dst_coord[1]) - margin
+    max_lat = max(src_coord[1], dst_coord[1]) + margin
+    bbox = (min_lon, min_lat, max_lon, max_lat)
+
+    # 3. Check subgraph cache (same area = instant)
+    t0 = time.time()
+    cached = _subgraph_cache.get(lines_geojson, bbox)
+
+    if cached is not None:
+        results = cached
+    else:
+        # 4. Load features using spatial tiles for large files, full load for small files
+        print(f"🗺️  Cargando features para bbox ({min_lon:.4f},{min_lat:.4f}) - ({max_lon:.4f},{max_lat:.4f})...")
+        all_features = []
+        
+        for path in lines_geojson.split(","):
+            path = path.strip()
+            if not path or not os.path.exists(path):
+                continue
+            
+            # Check file size to decide strategy
+            file_size = os.path.getsize(path)
+            
+            if file_size > 1_000_000:  # > 1MB → use tiles
+                # Ensure tiles exist (one-time preprocessing)
+                _tile_index.preprocess(path)
+                features = _tile_index.load_features_in_bbox(path, bbox)
+            else:
+                # Small file → load fully (teleférico, puma katari, etc.)
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                features = data.get("features", [])
+                print(f"    📄 {os.path.basename(path)}: {len(features)} features (carga completa)")
+            
+            all_features.extend(features)
+        
+        print(f"  Total: {len(all_features)} features combinadas")
+        
+        # 5. Build subgraph from loaded features
+        try:
+            results = build_network_from_lines(features_list=all_features, bbox=bbox)
+            _subgraph_cache.put(lines_geojson, bbox, results)
+        except Exception as e:
+            raise ValueError(f"Failed to build network: {str(e)}")
+
+    G = results["graph"]
+    node_idx = results["node_index"]
+    edge_lines = results["edge_lines"]
+    line_info = results["line_info"]
+    stations = results.get("stations", {})
+    
+    print(f"Grafo listo: {G.number_of_nodes()} nodos, {G.number_of_edges()} aristas ({time.time()-t0:.3f}s)")
+
+    # 3. Map to nearest network nodes
     src_nid = _find_nearest_node(src_coord, node_idx)
     dst_nid = _find_nearest_node(dst_coord, node_idx)
     
     print(f"Mapped {src_id} -> {src_nid}, {dst_id} -> {dst_nid}")
 
-    # Find optimal path
+    # 4. Find optimal path (A* with heuristic on the full cached graph)
     try:
         path_node_ids, route_segments = _find_optimal_path(G, edge_lines, line_info, node_idx, src_nid, dst_nid)
     except Exception as e:

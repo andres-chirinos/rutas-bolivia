@@ -123,39 +123,30 @@ async def demo_museums(src: str = Query(...), dst: str = Query(...), network: Op
     """
     # Import plugins lazily and call them.
     try:
-        fetcher = importlib.import_module("plugins.wikidata_plugin.wikidata_fetcher")
         compute = importlib.import_module("plugins.graph_compute.shortest_path")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to import demo plugins: {e}")
 
-    # prepare tmp dir and filenames
-    tmpdir = os.path.join(os.getcwd(), "tmp")
-    os.makedirs(tmpdir, exist_ok=True)
-    nodes_path = os.path.join(tmpdir, f"nodes_{uuid.uuid4().hex}.geojson")
-
-    # 1) Fetch nodes -> writes to nodes_path
+    # 1) Get nodes from the same source as /museums (fetch_common_query)
     try:
-        if hasattr(fetcher, "fetch_museums_bolivia"):
-            # signature: fetch_museums_bolivia(output_geojson, limit=...)
-            returned = fetcher.fetch_museums_bolivia(nodes_path)
-            # plugin returns the path it wrote
-            nodes_file = returned or nodes_path
-        elif hasattr(fetcher, "fetch_museums"):
-            returned = fetcher.fetch_museums(nodes_path)
-            nodes_file = returned or nodes_path
-        else:
-            raise AttributeError("No known fetch function in wikidata plugin (expected fetch_museums_bolivia or fetch_museums)")
+        from plugins.wikidata_plugin.wikidata_general import fetch_common_query
+        result_asset = fetch_common_query("museums_bolivia", limit=500)
+        nodes_file = result_asset.get("data_path")
+        
+        if not nodes_file or not os.path.exists(nodes_file):
+            raise Exception("No se pudo obtener el archivo geojson de Wikidata.")
     except Exception as e:
         tb = traceback.format_exc()
         raise HTTPException(status_code=500, detail={"error": f"Failed during fetch: {e}", "traceback": tb})
 
-    if not os.path.exists(nodes_file):
-        raise HTTPException(status_code=500, detail={"error": "Fetcher did not produce nodes file", "path": nodes_file})
 
-    # 2) Determine network path (we keep it as a path because compute expects a path)
+    # 2) Determine network path(s)
     network_path = network or DEFAULT_NETWORK
-    if not os.path.exists(network_path):
-        raise HTTPException(status_code=400, detail={"error": f"Network file not found: {network_path}"})
+    # Validate all paths if comma-separated
+    for path in network_path.split(","):
+        path = path.strip()
+        if path and not os.path.exists(path):
+            raise HTTPException(status_code=400, detail={"error": f"Network file not found: {path}"})
 
     # 3) Call compute.shortest_path with file paths
     try:
@@ -177,8 +168,12 @@ async def demo_museums(src: str = Query(...), dst: str = Query(...), network: Op
         nodes_json = None
 
     try:
-        with open(network_path, "r", encoding="utf-8") as fh:
-            network_json = json.load(fh)
+        # Only return network json if it's a single file, otherwise it's too large/complex
+        if "," not in network_path:
+            with open(network_path, "r", encoding="utf-8") as fh:
+                network_json = json.load(fh)
+        else:
+            network_json = None
     except Exception:
         network_json = None
 

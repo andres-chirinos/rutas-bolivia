@@ -25,3 +25,5 @@ data_store/
 *.db
 *.json
 dummy_datasets/*
+.graph_cache/
+.graph_tiles/
