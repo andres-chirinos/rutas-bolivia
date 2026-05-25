@@ -365,12 +365,33 @@ def build_network_from_lines(
         # Optimization: Use 4 decimal places (approx 11m precision) to snap nearby nodes
         return f"{coord[0]:.4f},{coord[1]:.4f}"
 
-    def add_node(coord: Tuple[float, float]) -> str:
+    def add_node(coord: Tuple[float, float], is_transit: bool = False, line_id: str = None) -> str:
         """Add node to graph and index."""
-        node_id = coord_id(coord)
+        base_id = coord_id(coord)
+        node_id = base_id if not is_transit else f"{base_id}_{line_id}"
+        
         if node_id not in node_index:
             node_index[node_id] = coord
             G.add_node(node_id, coord=coord)
+            
+            if is_transit:
+                # Ensure base node exists
+                if base_id not in node_index:
+                    node_index[base_id] = coord
+                    G.add_node(base_id, coord=coord)
+                
+                # Add transfer edge
+                transfer_cost = TRANSFER_PENALTY / 2.0
+                transfer_data = {
+                    "line_id": "transfer",
+                    "transport_type": "walking",
+                    "layer_type": "transfer",
+                    "weight": transfer_cost,
+                    "distance_km": 0.0,
+                    "is_transfer": True
+                }
+                add_edge(base_id, node_id, transfer_cost, 0.0, transfer_data)
+                
         return node_id
 
     def add_edge(node1: str, node2: str, weight: float, distance: float, line_data: Dict[str, Any]):
@@ -452,8 +473,9 @@ def build_network_from_lines(
 
             # Create nodes for all coordinates
             node_ids = []
+            is_transit = (layer_type != "street")
             for coord in coords:
-                node_ids.append(add_node(tuple(coord)))
+                node_ids.append(add_node(tuple(coord), is_transit=is_transit, line_id=line_id))
 
             # Add edges based on layer type
             if layer_type == "street":
@@ -532,12 +554,12 @@ def build_network_from_lines(
                             
                             add_edge(station1, station2, cost, distance, line_data)
 
-    # ── Bridge connections: link transport nodes ↔ nearest street node ──────
+    # ── Bridge connections: link isolated base nodes ↔ nearest street node ──────
     # Instead of an O(N²) loop over all nodes, we only create ONE walking edge
-    # from each transport-only node to its single nearest street node.
+    # from each isolated base node to its single nearest street node.
     from collections import defaultdict
     
-    print("Creando puentes transporte ↔ calles...")
+    print("Creando puentes base ↔ calles...")
     
     # 1. Classify nodes by layer
     node_layers = defaultdict(set)
@@ -548,9 +570,11 @@ def build_network_from_lines(
             node_layers[n2].add(lt)
     
     street_nodes = {nid for nid, layers in node_layers.items() if "street" in layers}
-    transport_only = {nid for nid in G.nodes() if nid not in street_nodes}
     
-    print(f"  Nodos calle: {len(street_nodes)}, Nodos solo-transporte: {len(transport_only)}")
+    # Isolated base nodes are nodes without "_" that don't have street edges
+    isolated_base = {nid for nid in G.nodes() if nid not in street_nodes and "_" not in nid}
+    
+    print(f"  Nodos calle: {len(street_nodes)}, Nodos base aislados: {len(isolated_base)}")
     
     # 2. Spatial index of street nodes only (lightweight)
     street_grid = defaultdict(list)
@@ -560,9 +584,9 @@ def build_network_from_lines(
             c = node_index[nid]
             street_grid[(int(c[0]/grid_sz), int(c[1]/grid_sz))].append((nid, c))
     
-    # 3. For each transport-only node, connect to nearest street node
+    # 3. For each isolated base node, connect to nearest street node
     bridges = 0
-    for nid in transport_only:
+    for nid in isolated_base:
         if nid not in node_index:
             continue
         coord = node_index[nid]
@@ -613,6 +637,8 @@ def _find_nearest_node(
     bestd = float("inf")
     # Use Manhattan distance for speed (good enough for finding nearest)
     for nid, (nx_, ny_) in node_index.items():
+        if "_" in nid:
+            continue  # Only start/end at base nodes, forcing transfer penalty to use transit
         d = abs(px - nx_) + abs(py - ny_)  # Manhattan distance is faster than Euclidean
         if d < bestd:
             bestd = d
@@ -758,27 +784,47 @@ def _find_optimal_path(
     # Convert successful path to segments, consolidated by TRANSPORT TYPE
     # (not by line_id, since streets have unique IDs per segment)
     raw_edges = []
+    previous_line_id = None
+    
     for i in range(len(path_nodes) - 1):
         current_node = path_nodes[i]
         next_node = path_nodes[i + 1]
         edge_key = tuple(sorted((current_node, next_node)))
         
         if edge_key in edge_lines:
-            best_line = min(edge_lines[edge_key], key=lambda x: x["weight"])
-            transport_type = best_line.get("transport_type", "unknown")
-            layer_type = best_line.get("layer_type", "unknown")
+            options = edge_lines[edge_key]
+            
+            # Prefer staying on the same line to avoid "fake" transfers in UI
+            # when multiple lines share the same exact street segment.
+            chosen_line = None
+            if previous_line_id is not None:
+                for opt in options:
+                    if opt.get("line_id") == previous_line_id:
+                        chosen_line = opt
+                        break
+            
+            if chosen_line is None:
+                chosen_line = min(options, key=lambda x: x["weight"])
+                
+            previous_line_id = chosen_line.get("line_id")
+            
+            transport_type = chosen_line.get("transport_type", "unknown")
+            layer_type = chosen_line.get("layer_type", "unknown")
+            
             # Normalize: streets and walking bridges are all "walking"
             if layer_type == "street" or transport_type == "walking":
                 mode = "walking"
+                previous_line_id = None # Reset line tracking for walking
             else:
                 mode = transport_type
+                
             raw_edges.append({
                 "mode": mode,
-                "line_id": best_line.get("line_id", ""),
+                "line_id": chosen_line.get("line_id", ""),
                 "transport_type": transport_type,
                 "from": current_node,
                 "to": next_node,
-                "distance_km": best_line.get("distance_km", 0),
+                "distance_km": chosen_line.get("distance_km", 0),
             })
     
     # Consolidate consecutive edges with the same mode
