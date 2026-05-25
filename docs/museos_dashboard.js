@@ -348,13 +348,14 @@
         totalWalkingDistance += summary.walking_distance_km || 0;
         totalTransportDistance += summary.transport_distance_km || 0;
         totalTransferTime += summary.total_transfer_time_minutes || 0;
-
-        if (segment.route.lines_used) {
-          segment.route.lines_used.forEach((line) => {
-            allLines.add(line.line_id);
-            transportTypes.add(line.transport_type);
-          });
-        }
+      }
+      // Count transport modes from consolidated segments
+      if (segment.route && segment.route.route_segments) {
+        segment.route.route_segments.forEach((seg) => {
+          const mode = seg.transport_type || seg.type;
+          if (mode && mode !== 'walking') transportTypes.add(mode);
+          allLines.add(mode);
+        });
       }
     });
 
@@ -408,51 +409,51 @@
                     </div>
                 `;
 
-        // Mostrar líneas utilizadas
-        if (route.lines_used && route.lines_used.length > 0) {
-          detailsHTML += `
-                        <div style="margin-top: 6px;">
-                            <strong style="font-size: 11px;">🚇 Líneas:</strong>
-                            <div style="margin-top: 4px;">
-                    `;
-
-          route.lines_used.forEach((line) => {
-            const transportIcon = getTransportIcon(line.transport_type);
+        // Show visual transport timeline
+        if (route.route_segments && route.route_segments.length > 0) {
+          const modeColors = {
+            walking: '#4CAF50',
+            bus: '#2196F3',
+            minibus: '#03A9F4',
+            teleferico: '#9C27B0',
+            taxi: '#FF9800',
+            default: '#607D8B'
+          };
+          const modeLabels = {
+            walking: 'Caminar',
+            bus: 'Bus',
+            minibus: 'Minibus',
+            teleferico: 'Teleférico',
+            taxi: 'Taxi',
+            default: 'Transporte'
+          };
+          
+          detailsHTML += `<div style="margin-top: 8px;">`;
+          route.route_segments.forEach((seg, si) => {
+            const mode = seg.transport_type || seg.type || 'default';
+            const icon = getTransportIcon(mode);
+            const color = modeColors[mode] || modeColors['default'];
+            const label = modeLabels[mode] || mode;
+            const dist = seg.distance_km?.toFixed(2) || '?';
+            
             detailsHTML += `
-                            <span style="display: inline-block; background: #f5f5f5; border: 1px solid #ddd; padding: 3px 8px; border-radius: 12px; margin: 2px; font-size: 10px;">
-                                ${transportIcon} ${line.line_id}
-                            </span>
-                        `;
+              <div style="display: flex; align-items: center; margin: 4px 0;">
+                <div style="width: 28px; height: 28px; border-radius: 50%; background: ${color}; color: white; display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0;">
+                  ${icon}
+                </div>
+                <div style="flex: 1; height: 3px; background: ${color}; margin: 0 4px;"></div>
+                <div style="font-size: 11px; color: #555; white-space: nowrap;">
+                  <strong>${label}</strong> ${dist} km
+                </div>
+              </div>
+            `;
+            
+            // Arrow between segments (except last)
+            if (si < route.route_segments.length - 1) {
+              detailsHTML += `<div style="text-align: center; font-size: 10px; color: #bbb; margin: -2px 0;">↓ cambio</div>`;
+            }
           });
-
-          detailsHTML += `</div></div>`;
-        }
-
-        // Mostrar pasos detallados si están disponibles
-        if (route.steps && route.steps.length > 0) {
-          detailsHTML += `
-                        <div style="margin-top: 8px;">
-                            <details style="font-size: 11px;">
-                                <summary style="cursor: pointer; font-weight: bold;">📋 Ver pasos detallados</summary>
-                                <div style="margin-top: 6px; padding-left: 12px;">
-                    `;
-
-          route.steps.forEach((step, stepIndex) => {
-            const stepIcon =
-              step.type === "walk"
-                ? "🚶"
-                : step.type === "transfer"
-                  ? "🔄"
-                  : "🚌";
-            detailsHTML += `
-                            <div style="margin: 4px 0; padding: 4px; background: #f9f9f9; border-left: 3px solid #ccc;">
-                                ${stepIndex + 1}. ${stepIcon} ${step.instruction || step.description}
-                                ${step.distance_km ? `<span style="color: #666;"> (${step.distance_km.toFixed(2)} km)</span>` : ""}
-                            </div>
-                        `;
-          });
-
-          detailsHTML += `</div></details></div>`;
+          detailsHTML += `</div>`;
         }
       } else {
         detailsHTML += `<div style="color: #999; font-size: 11px;">No hay detalles disponibles para este segmento</div>`;
@@ -474,11 +475,13 @@
       bus: "🚌",
       minibus: "🚐",
       taxi: "🚕",
-      teleferico: "🚠",
+      teleferico: "🚡",
       metro: "🚇",
       tram: "🚊",
       walk: "🚶",
+      walking: "🚶",
       transfer: "🔄",
+      default: "🚌",
     };
     return icons[transportType] || "🚌";
   }

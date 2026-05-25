@@ -192,10 +192,9 @@ LAYER_TYPES = {
 }
 
 # Cost constants
-TRANSFER_PENALTY = 2.0        # Reduced penalty for faster routing
-WALKING_COST_PER_KM = 12.0    # Cost per km of walking
-MAX_WALKING_DISTANCE_KM = 1.0 # Increased max walking distance
-BOARDING_PENALTY = 1.0        # Small penalty for boarding transport
+TRANSFER_PENALTY = 2.0        # Penalty to enter/exit transit or change networks
+WALKING_COST_PER_KM = 3.0     # Cost per km of walking (cheap, but transit is faster)
+MAX_WALKING_DISTANCE_KM = 2.0 # Allow walking up to 2km if needed
 
 
 def _get_transport_type(feature: Dict[str, Any]) -> str:
@@ -467,15 +466,17 @@ def build_network_from_lines(
                         node_index[next_node]
                     )
                     
+                    cost = distance * WALKING_COST_PER_KM
+                    
                     line_data = {
                         "line_id": line_id,
                         "transport_type": transport_type,
                         "layer_type": layer_type,
-                        "weight": transport_weight,
+                        "weight": cost,
                         "distance_km": distance
                     }
                     
-                    add_edge(curr_node, next_node, transport_weight, distance, line_data)
+                    add_edge(curr_node, next_node, cost, distance, line_data)
 
             elif layer_type == "free_line":
                 # Free lines: can board at any point, travel along line, alight at any point
@@ -488,15 +489,17 @@ def build_network_from_lines(
                         node_index[next_node]
                     )
                     
+                    cost = distance * transport_weight
+                    
                     line_data = {
                         "line_id": line_id,
                         "transport_type": transport_type,
                         "layer_type": layer_type,
-                        "weight": transport_weight + BOARDING_PENALTY,
+                        "weight": cost,
                         "distance_km": distance
                     }
                     
-                    add_edge(curr_node, next_node, transport_weight + BOARDING_PENALTY, distance, line_data)
+                    add_edge(curr_node, next_node, cost, distance, line_data)
 
             elif layer_type == "station_line":
                 # Station lines: can only board/alight at designated stations
@@ -516,17 +519,18 @@ def build_network_from_lines(
                                 node_index[station1], 
                                 node_index[station2]
                             )
+                            cost = (distance * transport_weight) + TRANSFER_PENALTY
                             
                             line_data = {
                                 "line_id": line_id,
                                 "transport_type": transport_type,
                                 "layer_type": layer_type,
-                                "weight": transport_weight + TRANSFER_PENALTY,
+                                "weight": cost,
                                 "distance_km": distance,
                                 "is_station_connection": True
                             }
                             
-                            add_edge(station1, station2, transport_weight + TRANSFER_PENALTY, distance, line_data)
+                            add_edge(station1, station2, cost, distance, line_data)
 
     # ── Bridge connections: link transport nodes ↔ nearest street node ──────
     # Instead of an O(N²) loop over all nodes, we only create ONE walking edge
@@ -576,15 +580,17 @@ def build_network_from_lines(
         if best_id is not None:
             real_dist = _calculate_distance_km(coord, node_index[best_id])
             if real_dist <= MAX_WALKING_DISTANCE_KM:
+                # Add TRANSFER_PENALTY to bridge to discourage arbitrary transit switching
+                bridge_cost = (real_dist * WALKING_COST_PER_KM) + TRANSFER_PENALTY
                 line_data = {
                     "line_id": "walking_bridge",
                     "transport_type": "walking",
                     "layer_type": "street",
-                    "weight": real_dist * WALKING_COST_PER_KM,
+                    "weight": bridge_cost,
                     "distance_km": real_dist,
                     "is_walking": True
                 }
-                add_edge(nid, best_id, real_dist * WALKING_COST_PER_KM, real_dist, line_data)
+                add_edge(nid, best_id, bridge_cost, real_dist, line_data)
                 bridges += 1
     
     print(f"  ✅ {bridges} puentes creados")
@@ -749,55 +755,68 @@ def _find_optimal_path(
             }
             return [src_nid, dst_nid], [walking_segment]
     
-    # Convert successful path to segments with line information
-    segments = []
-    current_line = None
-    current_coords = []
-    
+    # Convert successful path to segments, consolidated by TRANSPORT TYPE
+    # (not by line_id, since streets have unique IDs per segment)
+    raw_edges = []
     for i in range(len(path_nodes) - 1):
         current_node = path_nodes[i]
         next_node = path_nodes[i + 1]
         edge_key = tuple(sorted((current_node, next_node)))
         
         if edge_key in edge_lines:
-            # Use the best available line for this edge
             best_line = min(edge_lines[edge_key], key=lambda x: x["weight"])
-            line_id = best_line["line_id"]
-            
-            # If continuing on same line, extend current segment
-            if line_id == current_line:
-                current_coords.append(list(node_index[next_node]))
+            transport_type = best_line.get("transport_type", "unknown")
+            layer_type = best_line.get("layer_type", "unknown")
+            # Normalize: streets and walking bridges are all "walking"
+            if layer_type == "street" or transport_type == "walking":
+                mode = "walking"
             else:
-                # Finish previous segment if exists
-                if current_line is not None and current_coords:
-                    segments.append({
-                        "type": "transport",
-                        "line_id": current_line,
-                        "transport_type": line_info.get(current_line, {}).get("transport_type", "unknown"),
-                        "coordinates": current_coords,
-                        "distance_km": sum(_calculate_distance_km(
-                            tuple(current_coords[j]), tuple(current_coords[j+1])
-                        ) for j in range(len(current_coords)-1)),
-                        "cost": line_info.get(current_line, {}).get("weight", 0)
-                    })
-                
-                # Start new segment
-                current_line = line_id
-                current_coords = [list(node_index[current_node]), list(node_index[next_node])]
+                mode = transport_type
+            raw_edges.append({
+                "mode": mode,
+                "line_id": best_line.get("line_id", ""),
+                "transport_type": transport_type,
+                "from": current_node,
+                "to": next_node,
+                "distance_km": best_line.get("distance_km", 0),
+            })
     
-    # Add final segment
-    if current_line is not None and current_coords:
+    # Consolidate consecutive edges with the same mode
+    segments = []
+    if raw_edges:
+        current_mode = raw_edges[0]["mode"]
+        current_coords = [list(node_index[raw_edges[0]["from"]])]
+        current_dist = 0.0
+        current_lines = set()
+        
+        for edge in raw_edges:
+            if edge["mode"] == current_mode:
+                current_coords.append(list(node_index[edge["to"]]))
+                current_dist += edge["distance_km"]
+                current_lines.add(edge["line_id"])
+            else:
+                # Flush previous segment
+                segments.append({
+                    "type": current_mode,
+                    "transport_type": current_mode,
+                    "coordinates": current_coords,
+                    "distance_km": round(current_dist, 2),
+                })
+                # Start new segment
+                current_mode = edge["mode"]
+                current_coords = [list(node_index[edge["from"]]), list(node_index[edge["to"]])]
+                current_dist = edge["distance_km"]
+                current_lines = {edge["line_id"]}
+        
+        # Flush last segment
         segments.append({
-            "type": "transport",
-            "line_id": current_line,
-            "transport_type": line_info.get(current_line, {}).get("transport_type", "unknown"),
+            "type": current_mode,
+            "transport_type": current_mode,
             "coordinates": current_coords,
-            "distance_km": sum(_calculate_distance_km(
-                tuple(current_coords[j]), tuple(current_coords[j+1])
-            ) for j in range(len(current_coords)-1)),
-            "cost": line_info.get(current_line, {}).get("weight", 0)
+            "distance_km": round(current_dist, 2),
         })
     
+    print(f"Ruta consolidada: {len(segments)} segmentos")
     return path_nodes, segments
 
 
@@ -1036,6 +1055,7 @@ def shortest_path(
         "path_node_ids": path_node_ids,
         "route_geojson": route_fc,
         "lines_used": list(lines_used.values()),
+        "route_segments": route_segments,
         "summary": {
             "total_lines": len(lines_used),
             "total_distance_km": round(total_distance, 3),
