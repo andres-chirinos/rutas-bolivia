@@ -33,12 +33,14 @@ class _SpatialTileIndex:
     """Pre-processes large GeoJSON files into spatial tiles for fast bbox queries."""
 
     def __init__(self):
-        self._tile_dir = os.path.join(os.path.dirname(__file__), ".graph_tiles")
+        self._tile_dir = os.path.join(
+            os.path.dirname(__file__), ".graph_tiles")
         os.makedirs(self._tile_dir, exist_ok=True)
 
     # ── helpers ──────────────────────────────────────────────────────────────
     def _dir_for(self, geojson_path: str) -> str:
-        name = hashlib.md5(os.path.abspath(geojson_path).encode()).hexdigest()[:12]
+        name = hashlib.md5(os.path.abspath(
+            geojson_path).encode()).hexdigest()[:12]
         d = os.path.join(self._tile_dir, name)
         os.makedirs(d, exist_ok=True)
         return d
@@ -63,10 +65,12 @@ class _SpatialTileIndex:
         if self._is_preprocessed(geojson_path):
             with open(mp) as f:
                 manifest = json.load(f)
-            print(f"  ✅ Tiles ya preprocesados para {os.path.basename(geojson_path)} ({len(manifest)} tiles)")
+            print(
+                f"  ✅ Tiles ya preprocesados para {os.path.basename(geojson_path)} ({len(manifest)} tiles)")
             return manifest
 
-        print(f"  🔪 Dividiendo {os.path.basename(geojson_path)} en tiles espaciales...")
+        print(
+            f"  🔪 Dividiendo {os.path.basename(geojson_path)} en tiles espaciales...")
         t0 = time.time()
 
         with open(geojson_path, "r", encoding="utf-8") as f:
@@ -140,7 +144,8 @@ class _SpatialTileIndex:
                         features.extend(json.load(f))
                     tiles_loaded += 1
 
-        print(f"    📍 {os.path.basename(geojson_path)}: cargados {tiles_loaded} tiles, {len(features)} features (de bbox)")
+        print(
+            f"    📍 {os.path.basename(geojson_path)}: cargados {tiles_loaded} tiles, {len(features)} features (de bbox)")
         return features
 
 
@@ -188,26 +193,28 @@ TRANSPORT_WEIGHTS = {
 LAYER_TYPES = {
     "street": "walking",      # Can walk anywhere on streets
     "free_line": "boarding",  # Can board/alight anywhere on line
-    "station_line": "station" # Can only board/alight at designated stops
+    "station_line": "station"  # Can only board/alight at designated stops
 }
 
 # Cost constants
 TRANSFER_PENALTY = 2.0        # Penalty to enter/exit transit or change networks
-WALKING_COST_PER_KM = 3.0     # Cost per km of walking (cheap, but transit is faster)
-MAX_WALKING_DISTANCE_KM = 2.0 # Allow walking up to 2km if needed
+# Cost per km of walking (cheap, but transit is faster)
+WALKING_COST_PER_KM = 5.0
+MAX_WALKING_DISTANCE_KM = 1.0  # Allow walking up to 1km to find a station
+MIN_TRANSPORT_DISTANCE_KM = 3.0  # Min total distance to even consider transport
 
 
 def _get_transport_type(feature: Dict[str, Any]) -> str:
     """Extract transport type from feature properties."""
     props = feature.get("properties", {})
-    
+
     # Check various property names that might indicate transport type
     for key in ["tipo", "type", "transport_type", "mode", "linea_tipo", "layer_type"]:
         if key in props:
             transport_type = str(props[key]).lower()
             if transport_type in TRANSPORT_WEIGHTS:
                 return transport_type
-    
+
     # Try to infer from line name/id
     line_name = str(feature.get("id", "")).lower()
     if "teleferico" in line_name or "cable" in line_name:
@@ -220,19 +227,19 @@ def _get_transport_type(feature: Dict[str, Any]) -> str:
         return "taxi"
     elif "street" in line_name or "calle" in line_name:
         return "walking"
-    
+
     return "default"
 
 
 def _get_layer_type(feature: Dict[str, Any]) -> str:
     """Determine layer type: street, free_line, or station_line."""
     props = feature.get("properties", {})
-    
+
     # Check explicit layer type
     layer_type = props.get("layer_type", "").lower()
     if layer_type in LAYER_TYPES:
         return layer_type
-    
+
     # Infer from properties
     if props.get("type") == "street" or "street" in str(feature.get("id", "")).lower() or "tipovia" in props or "nombrevia" in props:
         return "street"
@@ -246,12 +253,13 @@ def _calculate_distance_km(coord1: Tuple[float, float], coord2: Tuple[float, flo
     """Calculate approximate distance in kilometers using Haversine formula."""
     lat1, lon1 = math.radians(coord1[1]), math.radians(coord1[0])
     lat2, lon2 = math.radians(coord2[1]), math.radians(coord2[0])
-    
+
     dlat = lat2 - lat1
     dlon = lon2 - lon1
-    a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+    a = math.sin(dlat/2)**2 + math.cos(lat1) * \
+        math.cos(lat2) * math.sin(dlon/2)**2
     c = 2 * math.asin(math.sqrt(a))
-    
+
     # Earth radius in km
     r = 6371
     return c * r
@@ -279,8 +287,8 @@ def get_transport_config() -> Dict[str, Any]:
 
 def update_transport_config(**kwargs) -> None:
     """Update transport configuration parameters."""
-    global TRANSPORT_WEIGHTS, TRANSFER_PENALTY, MAX_WALKING_DISTANCE_KM, WALKING_COST_PER_KM, BOARDING_PENALTY
-    
+    global TRANSPORT_WEIGHTS, TRANSFER_PENALTY, MAX_WALKING_DISTANCE_KM, WALKING_COST_PER_KM, BOARDING_PENALTY, MIN_TRANSPORT_DISTANCE_KM
+
     if "transport_weights" in kwargs:
         TRANSPORT_WEIGHTS.update(kwargs["transport_weights"])
     if "transfer_penalty" in kwargs:
@@ -291,6 +299,8 @@ def update_transport_config(**kwargs) -> None:
         WALKING_COST_PER_KM = kwargs["walking_cost_per_km"]
     if "boarding_penalty" in kwargs:
         BOARDING_PENALTY = kwargs["boarding_penalty"]
+    if "min_transport_distance_km" in kwargs:
+        MIN_TRANSPORT_DISTANCE_KM = kwargs["min_transport_distance_km"]
 
 
 def test_multilayer_network(lines_geojson: str) -> Dict[str, Any]:
@@ -300,18 +310,19 @@ def test_multilayer_network(lines_geojson: str) -> Dict[str, Any]:
         G = results["graph"]
         line_info = results["line_info"]
         stations = results["stations"]
-        
+
         # Analyze network composition
         layer_stats = {}
         transport_stats = {}
-        
+
         for line_id, info in line_info.items():
             layer_type = info["layer_type"]
             transport_type = info["transport_type"]
-            
+
             layer_stats[layer_type] = layer_stats.get(layer_type, 0) + 1
-            transport_stats[transport_type] = transport_stats.get(transport_type, 0) + 1
-        
+            transport_stats[transport_type] = transport_stats.get(
+                transport_type, 0) + 1
+
         return {
             "network_stats": {
                 "total_nodes": G.number_of_nodes(),
@@ -334,11 +345,11 @@ def build_network_from_lines(
     features_list: List[Dict] = None
 ) -> Dict[str, Any]:
     """Build a multi-layer graph supporting streets, free lines, and station lines.
-    
+
     Can be called with either:
     - lines_geojson_path: comma-separated paths to GeoJSON files (legacy)
     - features_list: pre-loaded list of GeoJSON features (from tile system)
-    
+
     Returns:
     - graph: NetworkX graph with multi-modal routing
     - node_index: maps node_id -> (lon, lat)
@@ -350,7 +361,8 @@ def build_network_from_lines(
         features_list = []
         for path in lines_geojson_path.split(","):
             path = path.strip()
-            if not path: continue
+            if not path:
+                continue
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 features_list.extend(data.get("features", []))
@@ -369,17 +381,17 @@ def build_network_from_lines(
         """Add node to graph and index."""
         base_id = coord_id(coord)
         node_id = base_id if not is_transit else f"{base_id}_{line_id}"
-        
+
         if node_id not in node_index:
             node_index[node_id] = coord
             G.add_node(node_id, coord=coord)
-            
+
             if is_transit:
                 # Ensure base node exists
                 if base_id not in node_index:
                     node_index[base_id] = coord
                     G.add_node(base_id, coord=coord)
-                
+
                 # Add transfer edge
                 transfer_cost = TRANSFER_PENALTY / 2.0
                 transfer_data = {
@@ -391,14 +403,14 @@ def build_network_from_lines(
                     "is_transfer": True
                 }
                 add_edge(base_id, node_id, transfer_cost, 0.0, transfer_data)
-                
+
         return node_id
 
     def add_edge(node1: str, node2: str, weight: float, distance: float, line_data: Dict[str, Any]):
         """Add edge with proper weight and line information."""
         edge_key = tuple(sorted((node1, node2)))
         edge_lines.setdefault(edge_key, []).append(line_data)
-        
+
         # Use minimum weight if edge already exists
         if G.has_edge(node1, node2):
             current_weight = G[node1][node2]["weight"]
@@ -413,15 +425,16 @@ def build_network_from_lines(
     features_processed = 0
     features_filtered = 0
     print(f"Cargadas {features_total} características desde los archivos.")
-    
+
     for idx, feat in enumerate(features_list):
         if idx > 0 and idx % 10000 == 0:
-            print(f"  ...procesando {idx}/{features_total} (Filtro BoundingBox omitió {features_filtered})...")
-            
+            print(
+                f"  ...procesando {idx}/{features_total} (Filtro BoundingBox omitió {features_filtered})...")
+
         geom = feat.get("geometry")
         if not geom:
             continue
-            
+
         geom_type = geom.get("type")
         if geom_type == "LineString":
             lines = [geom.get("coordinates", [])]
@@ -429,7 +442,7 @@ def build_network_from_lines(
             lines = geom.get("coordinates", [])
         else:
             continue
-            
+
         if bbox is not None:
             min_lon, min_lat, max_lon, max_lat = bbox
             in_bbox = False
@@ -449,8 +462,9 @@ def build_network_from_lines(
         line_id = str(feat.get("id", f"line_{idx}"))
         transport_type = _get_transport_type(feat)
         layer_type = _get_layer_type(feat)
-        transport_weight = TRANSPORT_WEIGHTS.get(transport_type, TRANSPORT_WEIGHTS["default"])
-        
+        transport_weight = TRANSPORT_WEIGHTS.get(
+            transport_type, TRANSPORT_WEIGHTS["default"])
+
         # Store line information
         line_info[line_id] = {
             "transport_type": transport_type,
@@ -475,7 +489,8 @@ def build_network_from_lines(
             node_ids = []
             is_transit = (layer_type != "street")
             for coord in coords:
-                node_ids.append(add_node(tuple(coord), is_transit=is_transit, line_id=line_id))
+                node_ids.append(
+                    add_node(tuple(coord), is_transit=is_transit, line_id=line_id))
 
             # Add edges based on layer type
             if layer_type == "street":
@@ -484,12 +499,12 @@ def build_network_from_lines(
                     curr_node = node_ids[i]
                     next_node = node_ids[i + 1]
                     distance = _calculate_distance_km(
-                        node_index[curr_node], 
+                        node_index[curr_node],
                         node_index[next_node]
                     )
-                    
+
                     cost = distance * WALKING_COST_PER_KM
-                    
+
                     line_data = {
                         "line_id": line_id,
                         "transport_type": transport_type,
@@ -497,7 +512,7 @@ def build_network_from_lines(
                         "weight": cost,
                         "distance_km": distance
                     }
-                    
+
                     add_edge(curr_node, next_node, cost, distance, line_data)
 
             elif layer_type == "free_line":
@@ -507,12 +522,12 @@ def build_network_from_lines(
                     curr_node = node_ids[i]
                     next_node = node_ids[i + 1]
                     distance = _calculate_distance_km(
-                        node_index[curr_node], 
+                        node_index[curr_node],
                         node_index[next_node]
                     )
-                    
+
                     cost = distance * transport_weight
-                    
+
                     line_data = {
                         "line_id": line_id,
                         "transport_type": transport_type,
@@ -520,7 +535,7 @@ def build_network_from_lines(
                         "weight": cost,
                         "distance_km": distance
                     }
-                    
+
                     add_edge(curr_node, next_node, cost, distance, line_data)
 
             elif layer_type == "station_line":
@@ -529,20 +544,22 @@ def build_network_from_lines(
                 if not line_stations:
                     # If no explicit stations, use start and end points
                     line_stations = [tuple(coords[0]), tuple(coords[-1])]
-                
+
                 # Add station nodes
-                station_nodes = [add_node(station_coord) for station_coord in line_stations]
-                
+                station_nodes = [add_node(station_coord)
+                                 for station_coord in line_stations]
+
                 # Connect all stations to each other (can travel between any two stations)
                 for i, station1 in enumerate(station_nodes):
                     for j, station2 in enumerate(station_nodes):
                         if i != j:
                             distance = _calculate_distance_km(
-                                node_index[station1], 
+                                node_index[station1],
                                 node_index[station2]
                             )
-                            cost = (distance * transport_weight) + TRANSFER_PENALTY
-                            
+                            cost = (distance * transport_weight) + \
+                                TRANSFER_PENALTY
+
                             line_data = {
                                 "line_id": line_id,
                                 "transport_type": transport_type,
@@ -551,16 +568,17 @@ def build_network_from_lines(
                                 "distance_km": distance,
                                 "is_station_connection": True
                             }
-                            
-                            add_edge(station1, station2, cost, distance, line_data)
+
+                            add_edge(station1, station2, cost,
+                                     distance, line_data)
 
     # ── Bridge connections: link isolated base nodes ↔ nearest street node ──────
     # Instead of an O(N²) loop over all nodes, we only create ONE walking edge
     # from each isolated base node to its single nearest street node.
     from collections import defaultdict
-    
+
     print("Creando puentes base ↔ calles...")
-    
+
     # 1. Classify nodes by layer
     node_layers = defaultdict(set)
     for (n1, n2), edges in edge_lines.items():
@@ -568,22 +586,26 @@ def build_network_from_lines(
             lt = edge.get("layer_type", "unknown")
             node_layers[n1].add(lt)
             node_layers[n2].add(lt)
-    
-    street_nodes = {nid for nid, layers in node_layers.items() if "street" in layers}
-    
+
+    street_nodes = {nid for nid, layers in node_layers.items()
+                    if "street" in layers}
+
     # Isolated base nodes are nodes without "_" that don't have street edges
-    isolated_base = {nid for nid in G.nodes() if nid not in street_nodes and "_" not in nid}
-    
-    print(f"  Nodos calle: {len(street_nodes)}, Nodos base aislados: {len(isolated_base)}")
-    
+    isolated_base = {nid for nid in G.nodes(
+    ) if nid not in street_nodes and "_" not in nid}
+
+    print(
+        f"  Nodos calle: {len(street_nodes)}, Nodos base aislados: {len(isolated_base)}")
+
     # 2. Spatial index of street nodes only (lightweight)
     street_grid = defaultdict(list)
     grid_sz = 0.002  # ~220m cells
     for nid in street_nodes:
         if nid in node_index:
             c = node_index[nid]
-            street_grid[(int(c[0]/grid_sz), int(c[1]/grid_sz))].append((nid, c))
-    
+            street_grid[(int(c[0]/grid_sz), int(c[1]/grid_sz))
+                        ].append((nid, c))
+
     # 3. For each isolated base node, connect to nearest street node
     bridges = 0
     for nid in isolated_base:
@@ -591,21 +613,23 @@ def build_network_from_lines(
             continue
         coord = node_index[nid]
         gx, gy = int(coord[0]/grid_sz), int(coord[1]/grid_sz)
-        
+
         best_id, best_dist = None, float('inf')
         for dx in range(-2, 3):
             for dy in range(-2, 3):
                 for snid, sc in street_grid.get((gx+dx, gy+dy), []):
-                    d = abs(coord[0]-sc[0]) + abs(coord[1]-sc[1])  # Manhattan for speed
+                    # Manhattan for speed
+                    d = abs(coord[0]-sc[0]) + abs(coord[1]-sc[1])
                     if d < best_dist:
                         best_dist = d
                         best_id = snid
-        
+
         if best_id is not None:
             real_dist = _calculate_distance_km(coord, node_index[best_id])
             if real_dist <= MAX_WALKING_DISTANCE_KM:
                 # Add TRANSFER_PENALTY to bridge to discourage arbitrary transit switching
-                bridge_cost = (real_dist * WALKING_COST_PER_KM) + TRANSFER_PENALTY
+                bridge_cost = (real_dist * WALKING_COST_PER_KM) + \
+                    TRANSFER_PENALTY
                 line_data = {
                     "line_id": "walking_bridge",
                     "transport_type": "walking",
@@ -616,12 +640,12 @@ def build_network_from_lines(
                 }
                 add_edge(nid, best_id, bridge_cost, real_dist, line_data)
                 bridges += 1
-    
+
     print(f"  ✅ {bridges} puentes creados")
 
     return {
-        "graph": G, 
-        "node_index": node_index, 
+        "graph": G,
+        "node_index": node_index,
         "edge_lines": edge_lines,
         "line_info": line_info,
         "stations": stations
@@ -639,7 +663,8 @@ def _find_nearest_node(
     for nid, (nx_, ny_) in node_index.items():
         if "_" in nid:
             continue  # Only start/end at base nodes, forcing transfer penalty to use transit
-        d = abs(px - nx_) + abs(py - ny_)  # Manhattan distance is faster than Euclidean
+        # Manhattan distance is faster than Euclidean
+        d = abs(px - nx_) + abs(py - ny_)
         if d < bestd:
             bestd = d
             best = nid
@@ -647,23 +672,23 @@ def _find_nearest_node(
 
 
 def _find_optimal_path(
-    G: nx.Graph, 
-    edge_lines: Dict[Tuple[str, str], List[Dict[str, Any]]], 
+    G: nx.Graph,
+    edge_lines: Dict[Tuple[str, str], List[Dict[str, Any]]],
     line_info: Dict[str, Dict[str, Any]],
     node_index: Dict[str, Tuple[float, float]],
-    src_nid: str, 
+    src_nid: str,
     dst_nid: str
 ) -> Tuple[List[str], List[Dict[str, Any]]]:
     """Find optimal path with multi-layer support and fallback strategies.
-    
+
     Returns (path_node_ids, route_segments) where route_segments contains detailed info about each segment.
     """
     src_coord = node_index[src_nid]
     dst_coord = node_index[dst_nid]
     direct_distance = _calculate_distance_km(src_coord, dst_coord)
-    
+
     # Strategy 1: Direct walking if reasonable
-    if direct_distance <= MAX_WALKING_DISTANCE_KM:
+    if direct_distance <= MIN_TRANSPORT_DISTANCE_KM:
         walking_segment = {
             "type": "walking",
             "distance_km": direct_distance,
@@ -671,108 +696,114 @@ def _find_optimal_path(
             "coordinates": [list(src_coord), list(dst_coord)]
         }
         return [src_nid, dst_nid], [walking_segment]
-    
+
     # Strategy 2: Try A* path on existing graph
     def dist_heuristic(u, v):
         try:
             u_coord = node_index[u]
             v_coord = node_index[v]
-            return _calculate_distance_km(u_coord, v_coord) * 1.0 # Minimum weight factor
+            # Minimum weight factor
+            return _calculate_distance_km(u_coord, v_coord) * 1.0
         except KeyError:
             return 0
 
     print(f"Buscando ruta con A* desde {src_nid} hasta {dst_nid}...")
     try:
-        path_nodes = nx.astar_path(G, source=src_nid, target=dst_nid, heuristic=dist_heuristic, weight="weight")
+        path_nodes = nx.astar_path(
+            G, source=src_nid, target=dst_nid, heuristic=dist_heuristic, weight="weight")
         print(f"Ruta A* encontrada con {len(path_nodes)} nodos.")
     except nx.NetworkXNoPath:
         # Strategy 3: Find nearest connected nodes and create multi-segment route
         print(f"No direct path found. Attempting multi-segment routing with A*...")
-        
+
         # Find all nodes within walking distance of source
         src_candidates = []
         dst_candidates = []
-        
+
         for node_id, coord in node_index.items():
             src_dist = _calculate_distance_km(src_coord, coord)
             dst_dist = _calculate_distance_km(dst_coord, coord)
-            
+
             if src_dist <= MAX_WALKING_DISTANCE_KM and G.degree(node_id) > 0:
                 src_candidates.append((node_id, src_dist))
             if dst_dist <= MAX_WALKING_DISTANCE_KM and G.degree(node_id) > 0:
                 dst_candidates.append((node_id, dst_dist))
-        
+
         # Sort by distance
         src_candidates.sort(key=lambda x: x[1])
         dst_candidates.sort(key=lambda x: x[1])
-        
+
         # Try combinations until we find a path
         best_path = None
         best_segments = None
         best_cost = float('inf')
-        
+
         for src_node, src_walk_dist in src_candidates[:5]:  # Try top 5 closest
             for dst_node, dst_walk_dist in dst_candidates[:5]:
                 try:
-                    middle_path = nx.astar_path(G, source=src_node, target=dst_node, heuristic=dist_heuristic, weight="weight")
-                    
+                    middle_path = nx.astar_path(
+                        G, source=src_node, target=dst_node, heuristic=dist_heuristic, weight="weight")
+
                     # Calculate total cost
-                    total_cost = (src_walk_dist + dst_walk_dist) * WALKING_COST_PER_KM
+                    total_cost = (src_walk_dist + dst_walk_dist) * \
+                        WALKING_COST_PER_KM
                     path_cost = nx.path_weight(G, middle_path, weight="weight")
                     total_cost += path_cost
-                    
+
                     if total_cost < best_cost:
-                            best_cost = total_cost
-                            best_path = [src_nid] + middle_path + [dst_nid]
-                            
-                            # Create segments
-                            segments = []
-                            
-                            # Walking to network
-                            if src_walk_dist > 0:
+                        best_cost = total_cost
+                        best_path = [src_nid] + middle_path + [dst_nid]
+
+                        # Create segments
+                        segments = []
+
+                        # Walking to network
+                        if src_walk_dist > 0:
+                            segments.append({
+                                "type": "walking",
+                                "distance_km": src_walk_dist,
+                                "cost": src_walk_dist * WALKING_COST_PER_KM,
+                                "coordinates": [list(src_coord), list(node_index[src_node])]
+                            })
+
+                        # Network path
+                        for i in range(len(middle_path) - 1):
+                            curr_node = middle_path[i]
+                            next_node = middle_path[i + 1]
+                            edge_key = tuple(sorted((curr_node, next_node)))
+
+                            if edge_key in edge_lines:
+                                best_line = min(
+                                    edge_lines[edge_key], key=lambda x: x["weight"])
                                 segments.append({
-                                    "type": "walking",
-                                    "distance_km": src_walk_dist,
-                                    "cost": src_walk_dist * WALKING_COST_PER_KM,
-                                    "coordinates": [list(src_coord), list(node_index[src_node])]
+                                    "type": "transport",
+                                    "line_id": best_line["line_id"],
+                                    "transport_type": best_line["transport_type"],
+                                    "coordinates": [list(node_index[curr_node]), list(node_index[next_node])],
+                                    "distance_km": best_line["distance_km"],
+                                    "cost": best_line["weight"]
                                 })
-                            
-                            # Network path
-                            for i in range(len(middle_path) - 1):
-                                curr_node = middle_path[i]
-                                next_node = middle_path[i + 1]
-                                edge_key = tuple(sorted((curr_node, next_node)))
-                                
-                                if edge_key in edge_lines:
-                                    best_line = min(edge_lines[edge_key], key=lambda x: x["weight"])
-                                    segments.append({
-                                        "type": "transport",
-                                        "line_id": best_line["line_id"],
-                                        "transport_type": best_line["transport_type"],
-                                        "coordinates": [list(node_index[curr_node]), list(node_index[next_node])],
-                                        "distance_km": best_line["distance_km"],
-                                        "cost": best_line["weight"]
-                                    })
-                            
-                            # Walking from network
-                            if dst_walk_dist > 0:
-                                segments.append({
-                                    "type": "walking",
-                                    "distance_km": dst_walk_dist,
-                                    "cost": dst_walk_dist * WALKING_COST_PER_KM,
-                                    "coordinates": [list(node_index[dst_node]), list(dst_coord)]
-                                })
-                            
-                            best_segments = segments
-                            
+
+                        # Walking from network
+                        if dst_walk_dist > 0:
+                            segments.append({
+                                "type": "walking",
+                                "distance_km": dst_walk_dist,
+                                "cost": dst_walk_dist * WALKING_COST_PER_KM,
+                                "coordinates": [list(node_index[dst_node]), list(dst_coord)]
+                            })
+
+                        best_segments = segments
+
                 except nx.NetworkXNoPath:
                     continue
-        
+
         if best_path:
             return best_path, best_segments
         else:
             # Strategy 4: Last resort - direct walking regardless of distance
-            print(f"No network path found. Using direct walking ({direct_distance:.2f} km)")
+            print(
+                f"No network path found. Using direct walking ({direct_distance:.2f} km)")
             walking_segment = {
                 "type": "walking",
                 "distance_km": direct_distance,
@@ -780,20 +811,20 @@ def _find_optimal_path(
                 "coordinates": [list(src_coord), list(dst_coord)]
             }
             return [src_nid, dst_nid], [walking_segment]
-    
+
     # Convert successful path to segments, consolidated by TRANSPORT TYPE
     # (not by line_id, since streets have unique IDs per segment)
     raw_edges = []
     previous_line_id = None
-    
+
     for i in range(len(path_nodes) - 1):
         current_node = path_nodes[i]
         next_node = path_nodes[i + 1]
         edge_key = tuple(sorted((current_node, next_node)))
-        
+
         if edge_key in edge_lines:
             options = edge_lines[edge_key]
-            
+
             # Prefer staying on the same line to avoid "fake" transfers in UI
             # when multiple lines share the same exact street segment.
             chosen_line = None
@@ -802,22 +833,22 @@ def _find_optimal_path(
                     if opt.get("line_id") == previous_line_id:
                         chosen_line = opt
                         break
-            
+
             if chosen_line is None:
                 chosen_line = min(options, key=lambda x: x["weight"])
-                
+
             previous_line_id = chosen_line.get("line_id")
-            
+
             transport_type = chosen_line.get("transport_type", "unknown")
             layer_type = chosen_line.get("layer_type", "unknown")
-            
+
             # Normalize: streets and walking bridges are all "walking"
             if layer_type == "street" or transport_type == "walking":
                 mode = "walking"
-                previous_line_id = None # Reset line tracking for walking
+                previous_line_id = None  # Reset line tracking for walking
             else:
                 mode = transport_type
-                
+
             raw_edges.append({
                 "mode": mode,
                 "line_id": chosen_line.get("line_id", ""),
@@ -826,7 +857,7 @@ def _find_optimal_path(
                 "to": next_node,
                 "distance_km": chosen_line.get("distance_km", 0),
             })
-    
+
     # Consolidate consecutive edges with the same mode
     segments = []
     if raw_edges:
@@ -834,7 +865,7 @@ def _find_optimal_path(
         current_coords = [list(node_index[raw_edges[0]["from"]])]
         current_dist = 0.0
         current_lines = set()
-        
+
         for edge in raw_edges:
             if edge["mode"] == current_mode:
                 current_coords.append(list(node_index[edge["to"]]))
@@ -842,38 +873,44 @@ def _find_optimal_path(
                 current_lines.add(edge["line_id"])
             else:
                 # Flush previous segment
+                primary_line = list(current_lines)[0] if current_lines else ""
                 segments.append({
                     "type": current_mode,
                     "transport_type": current_mode,
                     "coordinates": current_coords,
                     "distance_km": round(current_dist, 2),
+                    "line_id": primary_line
                 })
                 # Start new segment
                 current_mode = edge["mode"]
-                current_coords = [list(node_index[edge["from"]]), list(node_index[edge["to"]])]
+                current_coords = [
+                    list(node_index[edge["from"]]), list(node_index[edge["to"]])]
                 current_dist = edge["distance_km"]
                 current_lines = {edge["line_id"]}
-        
+
         # Flush last segment
+        primary_line = list(current_lines)[0] if current_lines else ""
         segments.append({
             "type": current_mode,
             "transport_type": current_mode,
             "coordinates": current_coords,
             "distance_km": round(current_dist, 2),
+            "line_id": primary_line
         })
-    
+
     print(f"Ruta consolidada: {len(segments)} segmentos")
     return path_nodes, segments
 
 
 def shortest_path(
-    nodes_geojson: str, 
-    lines_geojson: str, 
-    src_id: str, 
+    nodes_geojson: str,
+    lines_geojson: str,
+    src_id: str,
     dst_id: str,
     transport_preferences: Dict[str, float] = None,
     max_walking_km: float = 1.0,
-    transfer_penalty: float = 2.0
+    transfer_penalty: float = 2.0,
+    min_transport_km: float = 1.0
 ) -> Dict[str, Any]:
     """Compute optimal path along multi-layer network between node ids.
     Supports:
@@ -889,14 +926,16 @@ def shortest_path(
         transport_preferences: Custom weights for transport types (optional)
         max_walking_km: Maximum walking distance in km (default: 1.0)
         transfer_penalty: Penalty cost for line transfers (default: 2.0)
+        min_transport_km: Minimum distance (km) to consider transport (default: 1.0)
 
     Returns a dict with detailed route information including multi-modal segments.
     """
     # Update global constants with user preferences
-    global MAX_WALKING_DISTANCE_KM, TRANSFER_PENALTY
+    global MAX_WALKING_DISTANCE_KM, TRANSFER_PENALTY, MIN_TRANSPORT_DISTANCE_KM
     MAX_WALKING_DISTANCE_KM = max_walking_km
     TRANSFER_PENALTY = transfer_penalty
-    
+    MIN_TRANSPORT_DISTANCE_KM = min_transport_km
+
     # Update transport weights if provided
     if transport_preferences:
         TRANSPORT_WEIGHTS.update(transport_preferences)
@@ -920,7 +959,8 @@ def shortest_path(
     if src_coord is None:
         raise ValueError(f"Source node '{src_id}' not found in nodes geojson")
     if dst_coord is None:
-        raise ValueError(f"Destination node '{dst_id}' not found in nodes geojson")
+        raise ValueError(
+            f"Destination node '{dst_id}' not found in nodes geojson")
 
     # 2. Compute bounding box from src/dst (margin ~ 3.3km)
     margin = 0.03
@@ -938,17 +978,18 @@ def shortest_path(
         results = cached
     else:
         # 4. Load features using spatial tiles for large files, full load for small files
-        print(f"🗺️  Cargando features para bbox ({min_lon:.4f},{min_lat:.4f}) - ({max_lon:.4f},{max_lat:.4f})...")
+        print(
+            f"🗺️  Cargando features para bbox ({min_lon:.4f},{min_lat:.4f}) - ({max_lon:.4f},{max_lat:.4f})...")
         all_features = []
-        
+
         for path in lines_geojson.split(","):
             path = path.strip()
             if not path or not os.path.exists(path):
                 continue
-            
+
             # Check file size to decide strategy
             file_size = os.path.getsize(path)
-            
+
             if file_size > 1_000_000:  # > 1MB → use tiles
                 # Ensure tiles exist (one-time preprocessing)
                 _tile_index.preprocess(path)
@@ -958,15 +999,17 @@ def shortest_path(
                 with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 features = data.get("features", [])
-                print(f"    📄 {os.path.basename(path)}: {len(features)} features (carga completa)")
-            
+                print(
+                    f"    📄 {os.path.basename(path)}: {len(features)} features (carga completa)")
+
             all_features.extend(features)
-        
+
         print(f"  Total: {len(all_features)} features combinadas")
-        
+
         # 5. Build subgraph from loaded features
         try:
-            results = build_network_from_lines(features_list=all_features, bbox=bbox)
+            results = build_network_from_lines(
+                features_list=all_features, bbox=bbox)
             _subgraph_cache.put(lines_geojson, bbox, results)
         except Exception as e:
             raise ValueError(f"Failed to build network: {str(e)}")
@@ -976,18 +1019,20 @@ def shortest_path(
     edge_lines = results["edge_lines"]
     line_info = results["line_info"]
     stations = results.get("stations", {})
-    
-    print(f"Grafo listo: {G.number_of_nodes()} nodos, {G.number_of_edges()} aristas ({time.time()-t0:.3f}s)")
+
+    print(
+        f"Grafo listo: {G.number_of_nodes()} nodos, {G.number_of_edges()} aristas ({time.time()-t0:.3f}s)")
 
     # 3. Map to nearest network nodes
     src_nid = _find_nearest_node(src_coord, node_idx)
     dst_nid = _find_nearest_node(dst_coord, node_idx)
-    
+
     print(f"Mapped {src_id} -> {src_nid}, {dst_id} -> {dst_nid}")
 
     # 4. Find optimal path (A* with heuristic on the full cached graph)
     try:
-        path_node_ids, route_segments = _find_optimal_path(G, edge_lines, line_info, node_idx, src_nid, dst_nid)
+        path_node_ids, route_segments = _find_optimal_path(
+            G, edge_lines, line_info, node_idx, src_nid, dst_nid)
     except Exception as e:
         raise ValueError(f"Failed during route computation: {str(e)}")
 
@@ -996,12 +1041,12 @@ def shortest_path(
     lines_used = {}  # line_id -> segment info
     total_distance = 0
     total_walking_distance = 0
-    
+
     for segment in route_segments:
-        if segment["type"] == "transport":
-            line_id = segment["line_id"]
+        if segment["type"] != "walking":
+            line_id = segment.get("line_id", "unknown")
             transport_type = segment["transport_type"]
-            
+
             # Add to lines_used summary
             if line_id not in lines_used:
                 lines_used[line_id] = {
@@ -1013,14 +1058,14 @@ def shortest_path(
                     "total_distance": 0,
                     "is_transfer": segment.get("transfer", False)
                 }
-            
+
             lines_used[line_id]["segments"].append({
                 "coordinates": segment["coordinates"],
                 "distance_km": segment["distance_km"]
             })
             lines_used[line_id]["total_distance"] += segment["distance_km"]
             total_distance += segment["distance_km"]
-            
+
             # Create GeoJSON feature for this segment
             features.append({
                 "type": "Feature",
@@ -1037,11 +1082,11 @@ def shortest_path(
                     "transfer": segment.get("transfer", False)
                 }
             })
-            
+
         elif segment["type"] == "walking":
             total_walking_distance += segment["distance_km"]
             total_distance += segment["distance_km"]
-            
+
             # Create GeoJSON feature for walking segment
             features.append({
                 "type": "Feature",
@@ -1060,10 +1105,11 @@ def shortest_path(
     last_segment_end = route_segments[-1]["coordinates"][-1] if route_segments else None
 
     if first_segment_start and (
-        abs(src_coord[0] - first_segment_start[0]) > 1e-4 or 
+        abs(src_coord[0] - first_segment_start[0]) > 1e-4 or
         abs(src_coord[1] - first_segment_start[1]) > 1e-4
     ):
-        walk_distance = _calculate_distance_km(src_coord, tuple(first_segment_start))
+        walk_distance = _calculate_distance_km(
+            src_coord, tuple(first_segment_start))
         total_walking_distance += walk_distance
         features.insert(0, {
             "type": "Feature",
@@ -1078,10 +1124,11 @@ def shortest_path(
         })
 
     if last_segment_end and (
-        abs(dst_coord[0] - last_segment_end[0]) > 1e-4 or 
+        abs(dst_coord[0] - last_segment_end[0]) > 1e-4 or
         abs(dst_coord[1] - last_segment_end[1]) > 1e-4
     ):
-        walk_distance = _calculate_distance_km(tuple(last_segment_end), dst_coord)
+        walk_distance = _calculate_distance_km(
+            tuple(last_segment_end), dst_coord)
         total_walking_distance += walk_distance
         features.append({
             "type": "Feature",

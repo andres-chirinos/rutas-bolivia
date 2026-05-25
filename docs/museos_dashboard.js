@@ -450,7 +450,7 @@
             
             // Arrow between segments (except last)
             if (si < route.route_segments.length - 1) {
-              detailsHTML += `<div style="text-align: center; font-size: 10px; color: #bbb; margin: -2px 0;">↓ cambio</div>`;
+              detailsHTML += `<div style="text-align: center; font-size: 10px; color: #bbb; margin: -2px 0;">🔄 transbordo</div>`;
             }
           });
           detailsHTML += `</div>`;
